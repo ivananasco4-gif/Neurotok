@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text,
   TextInput, TouchableOpacity, View } from 'react-native';
 import { demoInit, demoSnapshot, demoTick } from './src/mock';
-import { fetchAll, runGoal, stopRun } from './src/api';
+import { auth, fetchAll, runGoal, stopRun } from './src/api';
 
 const C = { bg: '#0b0f17', card: '#131a27', line: '#22304a', txt: '#e6edf7', mut: '#8b9bb4',
   ok: '#22c55e', warn: '#f59e0b', bad: '#ef4444', acc: '#6366f1', cyan: '#22d3ee' };
@@ -10,7 +10,7 @@ const MONO = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
 const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
 // ---------------------------------------------------------------- datos (demo o API)
-function useBrain(mode, url) {
+function useBrain(mode, url, token) {
   const [snap, setSnap] = useState(demoSnapshot(demoInit()));
   const [err, setErr] = useState('');
   const demo = useRef(demoInit());
@@ -29,7 +29,7 @@ function useBrain(mode, url) {
     tick();
     const id = setInterval(tick, mode === 'demo' ? 1000 : 2000);
     return () => { alive = false; clearInterval(id); };
-  }, [mode, url]);
+  }, [mode, url, token]);
   return { snap, err };
 }
 
@@ -182,7 +182,7 @@ function VistaC({ snap }) {
 }
 
 // ---------------------------------------------------------------- Ajustes
-function Ajustes({ mode, setMode, url, setUrl, err }) {
+function Ajustes({ mode, setMode, url, setUrl, token, setToken, err }) {
   const [goal, setGoal] = useState('');
   const [msg, setMsg] = useState('');
   const act = async (fn) => { try { await fn(); setMsg('OK'); } catch (e) { setMsg(String(e.message || e)); } };
@@ -201,6 +201,9 @@ function Ajustes({ mode, setMode, url, setUrl, err }) {
         <Text style={[s.mut, { marginTop: 10 }]}>URL del servidor</Text>
         <TextInput style={s.input} value={url} onChangeText={setUrl} autoCapitalize="none"
           autoCorrect={false} placeholderTextColor={C.mut} />
+        <Text style={[s.mut, { marginTop: 10 }]}>Token (en Termux: cat ~/.neurotok_token)</Text>
+        <TextInput style={s.input} value={token} onChangeText={setToken} autoCapitalize="none"
+          autoCorrect={false} secureTextEntry placeholderTextColor={C.mut} />
         {!!err && mode === 'api' && <Text style={{ color: C.bad, marginTop: 6 }}>{err}</Text>}
       </Card>
       <Card>
@@ -226,7 +229,9 @@ export default function App() {
   const [tab, setTab] = useState('A');
   const [mode, setMode] = useState('demo');
   const [url, setUrl] = useState('http://127.0.0.1:8000');
-  const { snap, err } = useBrain(mode, url);
+  const [token, setToken] = useState('');
+  auth.token = token;
+  const { snap, err } = useBrain(mode, url, token);
   return (
     <SafeAreaView style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
@@ -240,7 +245,7 @@ export default function App() {
         {tab === 'A' && <VistaA snap={snap} />}
         {tab === 'B' && <VistaB snap={snap} />}
         {tab === 'C' && <VistaC snap={snap} />}
-        {tab === 'S' && <Ajustes {...{ mode, setMode, url, setUrl, err }} />}
+        {tab === 'S' && <Ajustes {...{ mode, setMode, url, setUrl, token, setToken, err }} />}
       </View>
       <View style={s.tabs}>
         {TABS.map(([k, label]) => (

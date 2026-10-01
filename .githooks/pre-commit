@@ -1,0 +1,10 @@
+#!/bin/sh
+# Bloquea commits que contengan claves o archivos secretos
+PAT='(\bsk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{30,}|\bgsk_[A-Za-z0-9]{20,}|\bxai-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})'
+if git diff --cached -U0 | grep -E '^\+' | grep -Eq "$PAT"; then
+  echo "BLOQUEADO: parece haber una clave en este commit"; exit 1
+fi
+if git diff --cached --name-only --diff-filter=AM | grep -Eq '(^|/)(cuentas\.json|\.env|\.neurotok_token)$'; then
+  echo "BLOQUEADO: archivo secreto en el commit"; exit 1
+fi
+exit 0

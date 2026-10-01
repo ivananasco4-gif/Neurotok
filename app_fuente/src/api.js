@@ -1,5 +1,10 @@
-const j = async (base, path, opts) => {
-  const r = await fetch(base + path, opts);
+export const auth = { token: '' };
+
+const headers = () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` });
+
+const j = async (base, path, opts = {}) => {
+  const r = await fetch(base + path, { ...opts, headers: headers() });
+  if (r.status === 401) throw new Error('Token incorrecto: revisa Ajustes');
   if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
   return r.json();
 };
@@ -12,6 +17,6 @@ export async function fetchAll(base) {
 }
 
 export const runGoal = (base, objetivo) =>
-  j(base, '/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ objetivo }) });
+  j(base, '/run', { method: 'POST', body: JSON.stringify({ objetivo }) });
 
 export const stopRun = (base) => j(base, '/stop', { method: 'POST' });

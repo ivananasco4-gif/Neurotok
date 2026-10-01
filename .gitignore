@@ -3,3 +3,7 @@ node_modules/
 __pycache__/
 *.pyc
 app/
+backend/cuentas.json
+.env
+*.token
+boveda_ia/

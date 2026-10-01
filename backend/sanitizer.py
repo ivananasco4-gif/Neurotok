@@ -29,6 +29,30 @@ ERROR_RE = re.compile(
 
 HEAD, TAIL, LIMIT = 5, 10, 25
 
+_KNOWN: set[str] = set()
+SECRET_RES = [re.compile(p) for p in (
+    r"sk-[A-Za-z0-9_\-]{16,}", r"AIza[0-9A-Za-z_\-]{30,}", r"gsk_[A-Za-z0-9]{20,}",
+    r"xai-[A-Za-z0-9]{20,}", r"gh[pousr]_[A-Za-z0-9]{30,}", r"github_pat_[A-Za-z0-9_]{30,}",
+    r"(?i)bearer\s+[A-Za-z0-9._\-]{16,}",
+)]
+KV_RE = re.compile(r"(?i)\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)[A-Z0-9_]*)\s*[=:]\s*\S+")
+
+
+def register_secrets(values) -> None:
+    """Registra claves reales para borrarlas siempre del texto."""
+    for v in values:
+        if v and len(v) >= 8:
+            _KNOWN.add(v)
+
+
+def redact(text: str) -> str:
+    text = text or ""
+    for k in _KNOWN:
+        text = text.replace(k, "[REDACTADO]")
+    for rx in SECRET_RES:
+        text = rx.sub("[REDACTADO]", text)
+    return KV_RE.sub(r"\1=[REDACTADO]", text)
+
 
 @dataclass
 class SanitizedResult:
@@ -86,6 +110,7 @@ def truncate(lines: list[str]) -> list[str]:
 
 def sanitize(command: str, exit_code: int, stdout: str = "", stderr: str = "",
              timed_out: bool = False) -> SanitizedResult:
+    command, stdout, stderr = redact(command), redact(stdout), redact(stderr)
     out_lines = truncate(clean_lines(stdout))
     err_lines = truncate(clean_lines(stderr))
     parts = [

@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import requests
+
+from sanitizer import register_secrets
 
 DISPONIBLE, TRABAJANDO, EN_PAUSA = "DISPONIBLE", "TRABAJANDO", "EN_PAUSA"
 DEFAULT_COOLDOWN = 60.0
@@ -59,6 +62,9 @@ class WorkerPool:
     def __init__(self, path: str = "cuentas.json") -> None:
         self._lock = threading.RLock()
         self.neuronas: list[Neurona] = []
+        path = os.environ.get("NEUROTOK_CUENTAS", path)
+        if not Path(path).exists():
+            raise SystemExit("Falta cuentas.json: copia cuentas.example.json a cuentas.json y pon tus claves.")
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         for c in data["cuentas"]:
             if c.get("tipo_auth", "api_key") != "api_key":
@@ -70,6 +76,7 @@ class WorkerPool:
                 id=c["id"], proveedor=c["proveedor"], credencial=c["credencial"],
                 rol_sugerido=c.get("rol_sugerido", "creador"), modelo=c.get("modelo", ""),
             ))
+        register_secrets(n.credencial for n in self.neuronas)
 
     def _refresh(self) -> None:
         now = time.time()
