@@ -1,0 +1,11 @@
+{
+  "cuentas": [
+    {"id": "gemini_01", "proveedor": "gemini", "tipo_auth": "api_key", "credencial": "TU_API_KEY_GEMINI_1", "rol_sugerido": "orquestador", "modelo": "gemini-2.5-flash", "estado": "DISPONIBLE"},
+    {"id": "gemini_02", "proveedor": "gemini", "tipo_auth": "api_key", "credencial": "TU_API_KEY_GEMINI_2", "rol_sugerido": "arquitecto", "modelo": "gemini-2.5-flash", "estado": "DISPONIBLE"},
+    {"id": "claude_01", "proveedor": "claude", "tipo_auth": "api_key", "credencial": "TU_API_KEY_ANTHROPIC_1", "rol_sugerido": "auditor", "modelo": "claude-sonnet-4-5", "estado": "DISPONIBLE"},
+    {"id": "groq_01", "proveedor": "groq", "tipo_auth": "api_key", "credencial": "TU_API_KEY_GROQ_1", "rol_sugerido": "creador", "modelo": "llama-3.3-70b-versatile", "estado": "DISPONIBLE"},
+    {"id": "deepseek_01", "proveedor": "deepseek", "tipo_auth": "api_key", "credencial": "TU_API_KEY_DEEPSEEK_1", "rol_sugerido": "creador", "modelo": "deepseek-chat", "estado": "DISPONIBLE"},
+    {"id": "qwen_01", "proveedor": "qwen", "tipo_auth": "api_key", "credencial": "TU_API_KEY_QWEN_1", "rol_sugerido": "creador", "modelo": "qwen-plus", "estado": "DISPONIBLE"},
+    {"id": "grok_01", "proveedor": "grok", "tipo_auth": "api_key", "credencial": "TU_API_KEY_GROK_1", "rol_sugerido": "auditor", "modelo": "grok-4", "estado": "DISPONIBLE"}
+  ]
+}
