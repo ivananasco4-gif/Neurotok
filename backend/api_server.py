@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from agent_loop import RUNTIME, AgentLoop
+from boveda_db import BovedaDB
 from vault_manager import VaultManager
 from worker_pool import WorkerPool
 
@@ -34,7 +35,8 @@ def load_token() -> str:
 TOKEN = load_token()
 pool = WorkerPool("cuentas.json")
 vault = VaultManager()
-loop = AgentLoop(pool, vault)
+db = BovedaDB(vault.root)
+loop = AgentLoop(pool, vault, db)
 _thread: threading.Thread | None = None
 
 SUBCEREBROS = {"orquestador": "Cerebro Central (Router)", "arquitecto": "Sub-Cerebro Arquitecto",
@@ -51,7 +53,9 @@ def get_neurons() -> dict:
 ROUTES_GET = {
     "/status": RUNTIME.status,
     "/neurons": get_neurons,
-    "/boveda": lambda: {"estado_actual_md": vault.read_context(), "metricas": vault.metrics()},
+    "/boveda": lambda: {"estado_actual_md": vault.read_context(), "metricas": {**vault.metrics(), **db.metricas()}},
+    "/boveda/grafo": db.grafo,
+    "/boveda/fallidos": db.fallidos_lista,
     "/flow": RUNTIME.flow,
 }
 
@@ -105,7 +109,22 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/stop":
             loop.stop()
             return self._send(200, {"ok": True})
+        if path.startswith("/boveda/"):
+            return self._boveda_post(path[len("/boveda/"):])
         self._send(404, {"error": "no existe"})
+
+    def _boveda_post(self, accion: str) -> None:
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+            if n > MAX_BODY:
+                return self._send(413, {"error": "pedido demasiado grande"})
+            datos = json.loads(self.rfile.read(n) or b"{}")
+            if not isinstance(datos, dict):
+                raise ValueError
+        except (ValueError, json.JSONDecodeError):
+            return self._send(400, {"error": "JSON inválido"})
+        ok, msg = db.accion(accion, datos)
+        self._send(200, {"ok": True}) if ok else self._send(400, {"ok": False, "error": msg})
 
     def log_message(self, *args) -> None:
         pass

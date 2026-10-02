@@ -9,6 +9,7 @@ import threading
 import time
 from pathlib import Path
 
+from boveda_db import BovedaDB
 from sanitizer import sanitize
 from vault_manager import VaultManager
 from worker_pool import (AuthError, LLMError, RateLimitError, WorkerPool, call_llm)
@@ -96,8 +97,9 @@ def parse_json(text: str) -> dict:
 
 
 class AgentLoop:
-    def __init__(self, pool: WorkerPool, vault: VaultManager) -> None:
+    def __init__(self, pool: WorkerPool, vault: VaultManager, db: BovedaDB | None = None) -> None:
         self.pool, self.vault = pool, vault
+        self.db = db or BovedaDB(vault.root)
         self.stop_event = threading.Event()
         WORKDIR.mkdir(parents=True, exist_ok=True)
 
@@ -130,6 +132,9 @@ class AgentLoop:
 
     # ---- ejecución segura del comando
     def _execute(self, cmd: str) -> tuple[int, str, str, bool]:
+        if self.db.es_fallido(cmd):  # reserva de fallidos: no repetir lo que ya falló para siempre
+            self.db.stat("rechazos_repetidos")
+            return 1, "", "Comando rechazado: ya falló de forma permanente antes. Propón uno distinto.", False
         if any(p.search(cmd) for p in BLOCKED) or (not ALLOW_RISKY and any(p.search(cmd) for p in RISKY)):
             return 1, "", "Comando bloqueado por la política de seguridad.", False
         env = {**os.environ, "NO_COLOR": "1", "CI": "1", "DEBIAN_FRONTEND": "noninteractive",
@@ -146,6 +151,7 @@ class AgentLoop:
     def run(self, objetivo: str) -> None:
         self.stop_event.clear()
         RUNTIME.reset(objetivo)
+        tid, paso_ids, t0 = None, [], time.time()
         try:
             RUNTIME.set(estado="PLANIFICANDO", etapa=1)
             plan = self._ask(["arquitecto", "orquestador"], SYS_ARQ,
@@ -153,6 +159,7 @@ class AgentLoop:
             pasos = [str(p) for p in plan["pasos"]][:10] or [objetivo]
             total = len(pasos)
             RUNTIME.set(total=total, estado="EJECUTANDO")
+            tid, paso_ids = self.db.nueva_tarea(objetivo, pasos)
             self.vault.update_state(objetivo, 1, total, "Plan creado", pasos[0])
             it_global, fallos, last_md = 0, 0, "(primer turno)"
 
@@ -162,7 +169,8 @@ class AgentLoop:
                     it_global += 1
                     RUNTIME.set(iteracion=it_global, etapa=2)
                     roles = ["auditor"] if fallos >= 2 else ["creador"]
-                    user = (f"{self.vault.read_context()}\n\nPaso {i}/{total}: {paso}\n"
+                    extra = self.db.contexto_para(objetivo, paso)
+                    user = (f"{self.vault.read_context()}{extra}\n\nPaso {i}/{total}: {paso}\n"
                             f"Último resultado:\n<salida_datos>\n{last_md}\n</salida_datos>")
                     r = self._ask(roles, SYS_EXEC, user, ("pensamiento", "comando", "estado"))
                     cmd = str(r.get("comando") or "").strip()
@@ -175,6 +183,8 @@ class AgentLoop:
                         fallos = fallos + 1 if code != 0 else 0
                         RUNTIME.set(etapa=5, consola_md=s.markdown, ahorro_pct=s.savings_pct)
                         self.vault.record_savings(s.raw_chars, s.clean_chars)
+                        self.db.comando(paso_ids[i - 1] if i <= len(paso_ids) else None,
+                                        cmd, code, err, to, objetivo, s.markdown)
                         self.vault.append_log(it_global, RUNTIME.neurona, r["pensamiento"], s.markdown)
                         res = f"`{cmd[:80]}` -> exit {code}"
                     else:
@@ -184,10 +194,13 @@ class AgentLoop:
                     self.vault.update_state(objetivo, i, total, res, pend)
                     if fin:
                         fallos = 0
+                        self.db.paso_estado(paso_ids[i - 1] if i <= len(paso_ids) else None, "ok")
                         break
             RUNTIME.set(estado="FINALIZADO", comando_activo="", etapa=5)
+            self.db.cerrar_tarea(tid, "ok", t0, WORKDIR)
         except Exception as e:  # noqa: BLE001
             RUNTIME.set(estado="ERROR", error=str(e))
+            self.db.cerrar_tarea(tid, "fallo", t0, WORKDIR)
 
     def stop(self) -> None:
         self.stop_event.set()
