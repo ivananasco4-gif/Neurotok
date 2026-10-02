@@ -62,3 +62,29 @@ export function demoSnapshot(s) {
     },
   };
 }
+
+// ---- Bóveda simulada: tareas → pasos → comandos, y reserva de comandos fallidos
+export const demoVault = () => ({
+  tareas: [
+    { id: 't1', titulo: 'Crear API REST de ejemplo', estado: 'en_curso', pasos: [
+      { id: 't1p1', titulo: 'Instalar dependencias', estado: 'ok', comandos: [
+        { id: 't1p1c1', cmd: 'pkg install -y python', exit: 0, estado: 'ok' },
+        { id: 't1p1c2', cmd: 'pip install fastapi', exit: 1, estado: 'fallo' },
+        { id: 't1p1c3', cmd: 'pip install requests', exit: 0, estado: 'ok' } ] },
+      { id: 't1p2', titulo: 'Crear main.py', estado: 'en_curso', comandos: [
+        { id: 't1p2c1', cmd: "cat > main.py << 'EOF'", exit: 0, estado: 'ok' },
+        { id: 't1p2c2', cmd: 'python main.py', exit: null, estado: 'en_curso' } ] } ] },
+    { id: 't2', titulo: 'Inicializar repositorio git', estado: 'ok', pasos: [
+      { id: 't2p1', titulo: 'git init y commit', estado: 'ok', comandos: [
+        { id: 't2p1c1', cmd: 'git init -b main', exit: 0, estado: 'ok' },
+        { id: 't2p1c2', cmd: 'git add . && git commit -m "init"', exit: 0, estado: 'ok' } ] } ] },
+  ],
+  fallidos: [
+    { id: 'f1', cmd: 'pip install fastapi', error: 'pydantic-core necesita compilar Rust (no disponible en Termux)',
+      tarea: 'Crear API REST de ejemplo', veces: 3, solucion: 'Usar http.server de la librería estándar', rehabilitado: false },
+    { id: 'f2', cmd: 'apt install nodejs', error: 'apt no existe en este entorno: se usa pkg',
+      tarea: 'Preparar entorno', veces: 1, solucion: 'pkg install nodejs-lts', rehabilitado: false },
+    { id: 'f3', cmd: 'python main.py', error: "ModuleNotFoundError: No module named 'flask'",
+      tarea: 'Crear API REST de ejemplo', veces: 2, solucion: '', rehabilitado: false },
+  ],
+});

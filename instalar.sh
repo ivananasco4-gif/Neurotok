@@ -9,5 +9,6 @@ if [ ! -d app ]; then
 fi
 cp app_fuente/App.js app/App.js
 cp -r app_fuente/src app/
+cp -r app_fuente/assets app/
 echo ""
 echo "Listo. Ahora ejecuta:  bash iniciar_app.sh"

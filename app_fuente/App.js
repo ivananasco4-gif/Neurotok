@@ -1,13 +1,38 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text,
-  TextInput, TouchableOpacity, View } from 'react-native';
-import { demoInit, demoSnapshot, demoTick } from './src/mock';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, Image, Modal, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput,
+  TouchableOpacity, View } from 'react-native';
+import { demoInit, demoSnapshot, demoTick, demoVault } from './src/mock';
 import { auth, fetchAll, runGoal, stopRun } from './src/api';
+import Canvas from './src/Canvas';
+import { buildGraph, buildVaultGraph } from './src/layout';
+import { deleteNode, editNode } from './src/vaultOps';
+import { T } from './src/theme';
 
-const C = { bg: '#0b0f17', card: '#131a27', line: '#22304a', txt: '#e6edf7', mut: '#8b9bb4',
-  ok: '#22c55e', warn: '#f59e0b', bad: '#ef4444', acc: '#6366f1', cyan: '#22d3ee' };
 const MONO = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
-const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+const LOGO_RATIO = 1000 / 212;      // assets/logo.png
+const WORDMARK_RATIO = 560 / 105;   // assets/wordmark_dark.png
+
+// ---------------------------------------------------------------- Pantalla de entrada (logo)
+function Intro({ onDone }) {
+  const logoOp = useRef(new Animated.Value(0)).current;
+  const fade = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    const anim = Animated.sequence([
+      Animated.timing(logoOp, { toValue: 1, duration: 500, useNativeDriver: true }),
+      Animated.delay(1100),
+      Animated.timing(fade, { toValue: 0, duration: 450, useNativeDriver: true }),
+    ]);
+    anim.start(({ finished }) => { if (finished) onDone(); });
+    return () => anim.stop();
+  }, []);
+  return (
+    <Animated.View style={[StyleSheet.absoluteFill, s.intro, { opacity: fade }]}
+      onStartShouldSetResponder={() => true} onResponderRelease={onDone}>
+      <Animated.Image source={require('./assets/logo.png')} resizeMode="contain"
+        style={{ width: '84%', aspectRatio: LOGO_RATIO, opacity: logoOp }} />
+    </Animated.View>
+  );
+}
 
 // ---------------------------------------------------------------- datos (demo o API)
 function useBrain(mode, url, token) {
@@ -16,6 +41,7 @@ function useBrain(mode, url, token) {
   const demo = useRef(demoInit());
   useEffect(() => {
     let alive = true;
+    let busy = false;
     setErr('');
     const tick = async () => {
       if (mode === 'demo') {
@@ -23,124 +49,44 @@ function useBrain(mode, url, token) {
         setSnap(demoSnapshot(demo.current));
         return;
       }
+      if (busy) return;
+      busy = true;
       try { const d = await fetchAll(url); if (alive) { setSnap(d); setErr(''); } }
       catch (e) { if (alive) setErr(String(e.message || e)); }
+      finally { busy = false; }
     };
     tick();
-    const id = setInterval(tick, mode === 'demo' ? 1000 : 2000);
+    const id = setInterval(tick, mode === 'demo' ? 1000 : 500);
     return () => { alive = false; clearInterval(id); };
   }, [mode, url, token]);
   return { snap, err };
 }
 
-// ---------------------------------------------------------------- piezas
-const Card = ({ children, style }) => <View style={[s.card, style]}>{children}</View>;
-const Title = ({ children }) => <Text style={s.h}>{children}</Text>;
+const Card = ({ children }) => <View style={s.card}>{children}</View>;
+const Btn = ({ children, onPress, on }) => (
+  <TouchableOpacity style={[s.pill, on && s.pillOn]} onPress={onPress}>
+    <Text style={[s.txt, on && { color: T.nodeTxt }]}>{children}</Text>
+  </TouchableOpacity>
+);
 
-function Badge({ n }) {
-  const col = n.estado === 'DISPONIBLE' ? C.ok : n.estado === 'TRABAJANDO' ? C.warn : C.bad;
-  const ico = n.estado === 'DISPONIBLE' ? '🟢' : n.estado === 'TRABAJANDO' ? '🟡' : '🔴';
-  return (
-    <View style={[s.badge, { borderColor: col }]}>
-      <Text style={s.bId}>{ico} {n.id}</Text>
-      <Text style={[s.bSt, { color: col }]}>
-        {n.estado === 'EN_PAUSA' ? `COOLDOWN ${fmt(n.cooldown_restante_s)}` : n.estado}
-      </Text>
-    </View>
-  );
-}
-
-function Node({ title, sub, color, children }) {
-  return (
-    <View style={[s.node, { borderColor: color }]}>
-      <Text style={[s.nodeT, { color }]}>{title}</Text>
-      {!!sub && <Text style={s.mut}>{sub}</Text>}
-      <View style={{ marginTop: 8 }}>{children}</View>
-    </View>
-  );
-}
-
-function Pulse({ active, children }) {
-  const a = useRef(new Animated.Value(1)).current;
-  useEffect(() => {
-    if (!active) { a.setValue(1); return; }
-    const loop = Animated.loop(Animated.sequence([
-      Animated.timing(a, { toValue: 0.45, duration: 600, useNativeDriver: true }),
-      Animated.timing(a, { toValue: 1, duration: 600, useNativeDriver: true })]));
-    loop.start();
-    return () => loop.stop();
-  }, [active]);
-  return <Animated.View style={{ opacity: a }}>{children}</Animated.View>;
-}
-
-// ---------------------------------------------------------------- Vista A
-function VistaA({ snap }) {
-  const ns = snap.neurons.neuronas;
-  const by = (r) => ns.filter((n) => n.rol === r);
+// ---------------------------------------------------------------- Lienzo
+function Lienzo({ snap }) {
   const st = snap.status;
+  const running = st.estado === 'EJECUTANDO' || st.estado === 'PLANIFICANDO';
+  const idx = snap.flow.etapas.findIndex((e) => e.activa);
+  const graph = useMemo(() => buildGraph(snap.neurons.neuronas, idx, running), [snap.neurons, idx, running]);
   return (
-    <ScrollView contentContainerStyle={s.pad}>
-      <Card>
-        <Text style={s.mut}>OBJETIVO</Text>
-        <Text style={s.txt}>{st.objetivo || '—'}</Text>
+    <View style={{ flex: 1 }}>
+      <View style={s.strip}>
+        <Text style={s.mut} numberOfLines={1}>{st.estado} · paso {st.paso_actual}/{st.total_pasos} · {st.progreso_pct}%</Text>
         <View style={s.barBg}><View style={[s.barFg, { width: `${st.progreso_pct}%` }]} /></View>
-        <Text style={s.mut}>Paso {st.paso_actual} de {st.total_pasos} · {st.progreso_pct}% · {st.estado}</Text>
-      </Card>
-
-      <Node title="🧠 Cerebro Central" sub="Orquestador (Router)" color={C.cyan}>
-        <View style={s.wrap}>{by('orquestador').map((n) => <Badge key={n.id} n={n} />)}</View>
-      </Node>
-      <View style={s.vline} />
-      {[['arquitecto', '📐 Sub-Cerebro Arquitecto', 'Planificación y desglose', C.acc],
-        ['creador', '⚙️ Sub-Cerebro Creador / Code', 'Qwen · DeepSeek · Groq', C.ok],
-        ['auditor', '🛡️ Sub-Cerebro Auditor / Debugger', 'Claude · Grok', C.warn]].map(([r, t, sub, col]) => (
-        <React.Fragment key={r}>
-          <Node title={t} sub={sub} color={col}>
-            <View style={s.wrap}>
-              {by(r).length ? by(r).map((n) => <Badge key={n.id} n={n} />) : <Text style={s.mut}>Sin neuronas</Text>}
-            </View>
-          </Node>
-          {r !== 'auditor' && <View style={s.vline} />}
-        </React.Fragment>
-      ))}
-    </ScrollView>
+      </View>
+      <Canvas graph={graph} chips storageKey="neurotok:pos:lienzo" hud={{ cmd: snap.flow.comando_activo, ahorro: snap.flow.ahorro_pct }} />
+    </View>
   );
 }
 
-// ---------------------------------------------------------------- Vista B
-function VistaB({ snap }) {
-  const f = snap.flow;
-  return (
-    <ScrollView contentContainerStyle={s.pad}>
-      <Card>
-        <Title>Flujo en tiempo real</Title>
-        {f.etapas.map((e, i) => (
-          <View key={e.nombre}>
-            <Pulse active={e.activa}>
-              <View style={[s.stage, e.activa && { borderColor: C.cyan, backgroundColor: '#0e2230' }]}>
-                <View style={[s.dot, { backgroundColor: e.activa ? C.cyan : C.line }]} />
-                <Text style={[s.txt, !e.activa && { color: C.mut }]}>{e.nombre}</Text>
-              </View>
-            </Pulse>
-            {i < f.etapas.length - 1 && <View style={s.vlineS} />}
-          </View>
-        ))}
-        <Text style={[s.mut, { textAlign: 'center', marginTop: 8 }]}>↻ Feedback loop</Text>
-      </Card>
-      <Card>
-        <Text style={s.mut}>COMANDO EN EJECUCIÓN</Text>
-        <Text style={s.cmd}>$ {f.comando_activo || '—'}</Text>
-      </Card>
-      <Card>
-        <Text style={s.mut}>AHORRO DE TOKENS (SANITIZADOR)</Text>
-        <Text style={s.big}>{f.ahorro_pct}%</Text>
-        <View style={s.barBg}><View style={[s.barFg, { width: `${Math.min(100, f.ahorro_pct)}%`, backgroundColor: C.ok }]} /></View>
-      </Card>
-    </ScrollView>
-  );
-}
-
-// ---------------------------------------------------------------- Vista C
+// ---------------------------------------------------------------- Bóveda
 function parseEstado(md) {
   return (md || '').split('\n').map((l) => l.match(/^\*\*(.+?):\*\*\s*(.*)$/)).filter(Boolean)
     .map((m) => ({ k: m[1], v: m[2].replace(/`/g, '') }));
@@ -152,32 +98,105 @@ function Consola({ md }) {
     <View style={s.term}>
       {(md || '').split('\n').map((l, i) => {
         if (l.startsWith('```')) { inCode = !inCode; return null; }
-        if (l.startsWith('> ')) return <Text key={i} style={[s.mono, { color: C.bad }]}>{l.slice(2)}</Text>;
-        if (l.startsWith('###')) return <Text key={i} style={[s.mono, { color: C.cyan }]}>{l.replace(/^#+\s*/, '')}</Text>;
-        if (l.startsWith('**')) return <Text key={i} style={[s.mono, { color: C.warn }]}>{l.replace(/\*\*/g, '')}</Text>;
-        return <Text key={i} style={[s.mono, inCode ? { color: '#c7f9cc' } : { color: C.txt }]}>{l.replace(/`/g, '')}</Text>;
+        if (l.startsWith('> ')) return <Text key={i} style={[s.mono, { color: '#fff', fontWeight: 'bold' }]}>▌{l.slice(2)}</Text>;
+        if (l.startsWith('###')) return <Text key={i} style={[s.mono, { color: T.mut }]}>{l.replace(/^#+\s*/, '')}</Text>;
+        if (l.startsWith('**')) return <Text key={i} style={[s.mono, { color: T.mut }]}>{l.replace(/\*\*/g, '')}</Text>;
+        return <Text key={i} style={[s.mono, { color: inCode ? T.node : T.txt }]}>{l.replace(/`/g, '')}</Text>;
       })}
     </View>
   );
 }
 
-function VistaC({ snap }) {
+function Estado({ snap }) {
   const items = parseEstado(snap.boveda.estado_actual_md);
   const m = snap.boveda.metricas;
   return (
     <ScrollView contentContainerStyle={s.pad}>
-      <Title>📚 00_estado_actual.md</Title>
+      <Text style={s.h}>00_estado_actual.md</Text>
       {items.map((it) => (
-        <Card key={it.k}><Text style={s.mut}>{it.k.toUpperCase()}</Text><Text style={s.txt}>{it.v}</Text></Card>
+        <Card key={it.k}><Text style={s.label}>{it.k.toUpperCase()}</Text><Text style={s.txt}>{it.v}</Text></Card>
       ))}
       <Card>
-        <Text style={s.mut}>MÉTRICAS</Text>
+        <Text style={s.label}>MÉTRICAS</Text>
         <Text style={s.txt}>Tokens crudos ≈ {m.tokens_crudos_aprox} → limpios ≈ {m.tokens_limpios_aprox}</Text>
-        <Text style={[s.big, { fontSize: 22 }]}>Ahorro {m.ahorro_pct}%</Text>
+        <Text style={s.big}>{m.ahorro_pct}%</Text>
+        <View style={s.barBg}><View style={[s.barFg, { width: `${Math.min(100, m.ahorro_pct)}%` }]} /></View>
       </Card>
-      <Title>🖥️ Consola sanitizada</Title>
+      <Text style={s.h}>Consola sanitizada</Text>
       <Consola md={snap.flow.consola_md} />
     </ScrollView>
+  );
+}
+
+function Fallidos({ vault, setVault }) {
+  const list = vault.fallidos;
+  const upd = (id, patch) => setVault((v) => ({ ...v, fallidos: v.fallidos.map((f) => (f.id === id ? { ...f, ...patch } : f)) }));
+  const del = (id) => setVault((v) => ({ ...v, fallidos: v.fallidos.filter((f) => f.id !== id) }));
+  return (
+    <ScrollView contentContainerStyle={s.pad}>
+      <Text style={s.mut}>La IA recibe estos comandos como "no repetir". Rehabilita uno si el entorno cambió.</Text>
+      {!list.length && <Text style={[s.txt, { marginTop: 14 }]}>No hay comandos fallidos.</Text>}
+      {list.map((f) => (
+        <View key={f.id} style={[s.card, { marginTop: 10 }, f.rehabilitado && { opacity: 0.55, borderStyle: 'dashed' }]}>
+          <Text style={[s.txt, { fontFamily: MONO }]}>$ {f.cmd}</Text>
+          <Text style={[s.mut, { marginTop: 6 }]}>{f.error}</Text>
+          <Text style={[s.mut, { marginTop: 4 }]}>Falló {f.veces} {f.veces === 1 ? 'vez' : 'veces'} · {f.tarea}</Text>
+          {!!f.solucion && <Text style={[s.txt, { marginTop: 6 }]}>↳ {f.solucion}</Text>}
+          {f.rehabilitado && <Text style={[s.label, { marginTop: 6 }]}>REHABILITADO · SE PERMITE DE NUEVO</Text>}
+          <View style={[s.row, { marginTop: 10 }]}>
+            <Btn onPress={() => upd(f.id, { rehabilitado: !f.rehabilitado })}>{f.rehabilitado ? 'Volver a bloquear' : 'Rehabilitar'}</Btn>
+            <Btn onPress={() => del(f.id)}>Borrar</Btn>
+          </View>
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
+const KIND = { tarea: 'tarea', paso: 'paso', cmd: 'comando' };
+
+function Boveda({ snap, mode, vault, setVault }) {
+  const [sec, setSec] = useState('estado');
+  const [edit, setEdit] = useState(null);
+  const [text, setText] = useState('');
+  const graph = useMemo(() => buildVaultGraph(vault.tareas), [vault.tareas]);
+  const open = (n) => { setEdit(n); setText(n.full || ''); };
+  const save = () => { setVault((v) => ({ ...v, tareas: editNode(v.tareas, edit.id, text) })); setEdit(null); };
+  const borrar = () => { setVault((v) => ({ ...v, tareas: deleteNode(v.tareas, edit.id) })); setEdit(null); };
+  const aviso = (t) => <View style={s.pad}><Text style={s.mut}>{t}</Text></View>;
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={s.seg}>
+        {[['estado', 'Estado'], ['grafo', 'Grafo'], ['fallidos', 'Fallidos']].map(([k, label]) => (
+          <TouchableOpacity key={k} style={[s.segItem, sec === k && s.segOn]} onPress={() => setSec(k)}>
+            <Text style={[s.tabT, sec === k && { color: T.nodeTxt }]}>{label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      {sec === 'estado' && <Estado snap={snap} />}
+      {sec === 'grafo' && (mode === 'demo'
+        ? <Canvas graph={graph} storageKey="neurotok:pos:boveda" onNodePress={open}
+            emptyText="La bóveda aún no tiene tareas" />
+        : aviso('El grafo real se conecta cuando la bóveda guarde tareas y comandos estructurados (próxima fase). Por ahora usa el modo Demo.'))}
+      {sec === 'fallidos' && (mode === 'demo'
+        ? <Fallidos vault={vault} setVault={setVault} />
+        : aviso('La reserva real de fallidos se conecta en la próxima fase. Por ahora usa el modo Demo.'))}
+      <Modal visible={!!edit} transparent animationType="fade" onRequestClose={() => setEdit(null)}>
+        <View style={s.modalBg}>
+          <View style={s.modal}>
+            <Text style={s.h}>Editar {edit ? KIND[edit.kind] : ''}</Text>
+            <TextInput style={[s.input, { minHeight: 80, fontFamily: edit?.kind === 'cmd' ? MONO : undefined }]}
+              multiline value={text} onChangeText={setText} autoCapitalize="none" autoCorrect={false} />
+            {edit?.kind !== 'cmd' && <Text style={[s.mut, { marginTop: 6 }]}>Borrar también elimina lo que cuelga de este nodo.</Text>}
+            <View style={[s.row, { marginTop: 12 }]}>
+              <Btn on onPress={save}>Guardar</Btn>
+              <Btn onPress={borrar}>Borrar</Btn>
+              <Btn onPress={() => setEdit(null)}>Cancelar</Btn>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 }
 
@@ -189,105 +208,99 @@ function Ajustes({ mode, setMode, url, setUrl, token, setToken, err }) {
   return (
     <ScrollView contentContainerStyle={s.pad}>
       <Card>
-        <Title>Modo</Title>
+        <Text style={s.h}>Modo</Text>
         <View style={s.row}>
-          {['demo', 'api'].map((m) => (
-            <TouchableOpacity key={m} onPress={() => setMode(m)}
-              style={[s.pill, mode === m && { backgroundColor: C.acc, borderColor: C.acc }]}>
-              <Text style={s.txt}>{m === 'demo' ? 'Demo (simulado)' : 'API real'}</Text>
-            </TouchableOpacity>
-          ))}
+          <Btn on={mode === 'demo'} onPress={() => setMode('demo')}>Demo</Btn>
+          <Btn on={mode === 'api'} onPress={() => setMode('api')}>API real</Btn>
         </View>
-        <Text style={[s.mut, { marginTop: 10 }]}>URL del servidor</Text>
-        <TextInput style={s.input} value={url} onChangeText={setUrl} autoCapitalize="none"
-          autoCorrect={false} placeholderTextColor={C.mut} />
-        <Text style={[s.mut, { marginTop: 10 }]}>Token (en Termux: cat ~/.neurotok_token)</Text>
-        <TextInput style={s.input} value={token} onChangeText={setToken} autoCapitalize="none"
-          autoCorrect={false} secureTextEntry placeholderTextColor={C.mut} />
-        {!!err && mode === 'api' && <Text style={{ color: C.bad, marginTop: 6 }}>{err}</Text>}
+        <Text style={[s.label, { marginTop: 12 }]}>URL DEL SERVIDOR</Text>
+        <TextInput style={s.input} value={url} onChangeText={setUrl} autoCapitalize="none" autoCorrect={false} />
+        <Text style={[s.label, { marginTop: 10 }]}>TOKEN (EN TERMUX: cat ~/.neurotok_token)</Text>
+        <TextInput style={s.input} value={token} onChangeText={setToken} autoCapitalize="none" autoCorrect={false} secureTextEntry />
+        {!!err && mode === 'api' && <Text style={[s.txt, { marginTop: 8 }]}>⚠ {err}</Text>}
       </Card>
       <Card>
-        <Title>Lanzar objetivo (modo API)</Title>
+        <Text style={s.h}>Lanzar objetivo (modo API)</Text>
         <TextInput style={[s.input, { height: 80 }]} multiline value={goal} onChangeText={setGoal}
-          placeholder="Ej: Crear un hola mundo en Python" placeholderTextColor={C.mut} />
+          placeholder="Ej: Crear un hola mundo en Python" placeholderTextColor={T.mut} />
         <View style={[s.row, { marginTop: 10 }]}>
-          <TouchableOpacity style={[s.pill, { backgroundColor: C.ok, borderColor: C.ok }]}
-            onPress={() => act(() => runGoal(url, goal))}><Text style={s.txt}>▶ Iniciar</Text></TouchableOpacity>
-          <TouchableOpacity style={[s.pill, { backgroundColor: C.bad, borderColor: C.bad }]}
-            onPress={() => act(() => stopRun(url))}><Text style={s.txt}>■ Detener</Text></TouchableOpacity>
+          <Btn on onPress={() => act(() => runGoal(url, goal))}>▶ Iniciar</Btn>
+          <Btn onPress={() => act(() => stopRun(url))}>■ Detener</Btn>
         </View>
-        {!!msg && <Text style={s.mut}>{msg}</Text>}
+        {!!msg && <Text style={[s.mut, { marginTop: 8 }]}>{msg}</Text>}
       </Card>
     </ScrollView>
   );
 }
 
 // ---------------------------------------------------------------- App
-const TABS = [['A', '🧠 Cerebro'], ['B', '🔄 Flujo'], ['C', '📚 Bóveda'], ['S', '⚙️']];
+const TABS = [['L', 'Lienzo'], ['B', 'Bóveda'], ['S', 'Ajustes']];
 
 export default function App() {
-  const [tab, setTab] = useState('A');
+  const [tab, setTab] = useState('L');
   const [mode, setMode] = useState('demo');
   const [url, setUrl] = useState('http://127.0.0.1:8000');
   const [token, setToken] = useState('');
+  const [vault, setVault] = useState(demoVault());
+  const [intro, setIntro] = useState(true);
   auth.token = token;
   const { snap, err } = useBrain(mode, url, token);
+  const live = mode === 'api' && !err;
   return (
     <SafeAreaView style={s.root}>
-      <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+      <StatusBar barStyle={intro ? 'dark-content' : 'light-content'} backgroundColor={intro ? '#ffffff' : T.bg} />
       <View style={s.top}>
-        <Text style={s.title}>Neurotok</Text>
-        <Text style={[s.tag, { color: mode === 'demo' ? C.warn : err ? C.bad : C.ok }]}>
-          {mode === 'demo' ? '● DEMO' : err ? '● SIN CONEXIÓN' : '● EN VIVO'}
+        <Image source={require('./assets/wordmark_dark.png')} resizeMode="contain" style={{ height: 22, width: 22 * WORDMARK_RATIO }} />
+        <Text style={[s.tag, live && { color: '#9b6dff' }]}>
+          {mode === 'demo' ? '○ DEMO' : err ? '○ SIN CONEXIÓN' : '● EN VIVO'}
         </Text>
       </View>
       <View style={{ flex: 1 }}>
-        {tab === 'A' && <VistaA snap={snap} />}
-        {tab === 'B' && <VistaB snap={snap} />}
-        {tab === 'C' && <VistaC snap={snap} />}
+        {tab === 'L' && <Lienzo snap={snap} />}
+        {tab === 'B' && <Boveda {...{ snap, mode, vault, setVault }} />}
         {tab === 'S' && <Ajustes {...{ mode, setMode, url, setUrl, token, setToken, err }} />}
       </View>
       <View style={s.tabs}>
         {TABS.map(([k, label]) => (
-          <TouchableOpacity key={k} style={s.tab} onPress={() => setTab(k)}>
-            <Text style={[s.tabT, tab === k && { color: C.cyan }]}>{label}</Text>
+          <TouchableOpacity key={k} style={[s.tab, tab === k && s.tabOn]} onPress={() => setTab(k)}>
+            <Text style={[s.tabT, tab === k && { color: T.txt }]}>{label}</Text>
           </TouchableOpacity>
         ))}
       </View>
+      {intro && <Intro onDone={() => setIntro(false)} />}
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg, paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
-  top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14 },
-  title: { color: C.txt, fontSize: 18, fontWeight: '700' },
-  tag: { fontSize: 12, fontWeight: '700' },
-  pad: { padding: 12, paddingBottom: 30 },
-  card: { backgroundColor: C.card, borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: C.line },
-  h: { color: C.txt, fontSize: 16, fontWeight: '700', marginBottom: 8, marginTop: 4 },
-  txt: { color: C.txt, fontSize: 14 },
-  mut: { color: C.mut, fontSize: 12 },
-  big: { color: C.ok, fontSize: 34, fontWeight: '800' },
-  barBg: { height: 8, backgroundColor: C.line, borderRadius: 4, marginVertical: 8, overflow: 'hidden' },
-  barFg: { height: 8, backgroundColor: C.acc, borderRadius: 4 },
-  node: { backgroundColor: C.card, borderRadius: 14, borderWidth: 1.5, padding: 12 },
-  nodeT: { fontSize: 15, fontWeight: '700' },
-  vline: { width: 2, height: 18, backgroundColor: C.line, alignSelf: 'center' },
-  vlineS: { width: 2, height: 10, backgroundColor: C.line, alignSelf: 'center' },
-  wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  badge: { borderWidth: 1, borderRadius: 10, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#0f1522' },
-  bId: { color: C.txt, fontSize: 13, fontWeight: '600' },
-  bSt: { fontSize: 11, marginTop: 2, fontWeight: '700' },
-  stage: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: 10, borderWidth: 1, borderColor: C.line },
-  dot: { width: 10, height: 10, borderRadius: 5 },
-  cmd: { color: '#c7f9cc', fontFamily: MONO, fontSize: 13, marginTop: 6 },
-  term: { backgroundColor: '#05080d', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: C.line },
+  root: { flex: 1, backgroundColor: T.bg, paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
+  top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12,
+    borderBottomWidth: 1, borderColor: T.line },
+  intro: { backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center' },
+  tag: { color: T.mut, fontSize: 11, fontWeight: '700', letterSpacing: 1 },
+  strip: { paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1, borderColor: T.line },
+  pad: { padding: 14, paddingBottom: 30 },
+  card: { backgroundColor: T.panel, borderRadius: 10, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: T.line },
+  h: { color: T.txt, fontSize: 14, fontWeight: '700', marginBottom: 8, marginTop: 4, letterSpacing: 0.5 },
+  txt: { color: T.txt, fontSize: 14 },
+  mut: { color: T.mut, fontSize: 12 },
+  label: { color: T.mut, fontSize: 10, letterSpacing: 1, marginBottom: 4 },
+  big: { color: T.txt, fontSize: 32, fontWeight: '800', marginTop: 6 },
+  barBg: { height: 4, backgroundColor: T.line, borderRadius: 2, marginVertical: 6, overflow: 'hidden' },
+  barFg: { height: 4, backgroundColor: T.node, borderRadius: 2 },
+  term: { backgroundColor: '#060607', borderRadius: 8, padding: 12, borderWidth: 1, borderColor: T.line },
   mono: { fontFamily: MONO, fontSize: 12, lineHeight: 17 },
-  row: { flexDirection: 'row', gap: 10 },
-  pill: { borderWidth: 1, borderColor: C.line, borderRadius: 20, paddingVertical: 8, paddingHorizontal: 16 },
-  input: { backgroundColor: '#0f1522', color: C.txt, borderRadius: 8, borderWidth: 1, borderColor: C.line, padding: 10, marginTop: 6 },
-  tabs: { flexDirection: 'row', borderTopWidth: 1, borderColor: C.line, backgroundColor: C.card },
-  tab: { flex: 1, alignItems: 'center', paddingVertical: 14 },
-  tabT: { color: C.mut, fontSize: 13, fontWeight: '600' },
+  row: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  pill: { borderWidth: 1, borderColor: T.line, borderRadius: 18, paddingVertical: 8, paddingHorizontal: 16 },
+  pillOn: { backgroundColor: T.node, borderColor: T.node },
+  input: { backgroundColor: T.bg, color: T.txt, borderRadius: 8, borderWidth: 1, borderColor: T.line, padding: 10, marginTop: 4 },
+  seg: { flexDirection: 'row', margin: 12, borderWidth: 1, borderColor: T.line, borderRadius: 10, overflow: 'hidden' },
+  segItem: { flex: 1, alignItems: 'center', paddingVertical: 9 },
+  segOn: { backgroundColor: T.node },
+  modalBg: { flex: 1, backgroundColor: '#000000cc', justifyContent: 'center', padding: 20 },
+  modal: { backgroundColor: T.panel, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: T.line },
+  tabs: { flexDirection: 'row', borderTopWidth: 1, borderColor: T.line, backgroundColor: T.bg },
+  tab: { flex: 1, alignItems: 'center', paddingVertical: 14, borderTopWidth: 2, borderTopColor: 'transparent' },
+  tabOn: { borderTopColor: T.node },
+  tabT: { color: T.mut, fontSize: 12, fontWeight: '600', letterSpacing: 1 },
 });

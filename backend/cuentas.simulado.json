@@ -1,0 +1,39 @@
+{
+  "cuentas": [
+    {
+      "id": "gemini_sim",
+      "proveedor": "simulado",
+      "tipo_auth": "api_key",
+      "credencial": "SIMULADO",
+      "rol_sugerido": "orquestador"
+    },
+    {
+      "id": "arq_sim",
+      "proveedor": "simulado",
+      "tipo_auth": "api_key",
+      "credencial": "SIMULADO",
+      "rol_sugerido": "arquitecto"
+    },
+    {
+      "id": "crea_sim_1",
+      "proveedor": "simulado",
+      "tipo_auth": "api_key",
+      "credencial": "SIMULADO",
+      "rol_sugerido": "creador"
+    },
+    {
+      "id": "crea_sim_2",
+      "proveedor": "simulado",
+      "tipo_auth": "api_key",
+      "credencial": "SIMULADO",
+      "rol_sugerido": "creador"
+    },
+    {
+      "id": "aud_sim",
+      "proveedor": "simulado",
+      "tipo_auth": "api_key",
+      "credencial": "SIMULADO",
+      "rol_sugerido": "auditor"
+    }
+  ]
+}

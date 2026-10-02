@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -138,9 +139,41 @@ def _check(resp: requests.Response) -> None:
         raise LLMError(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
 
+# ---------------------------------------------------------------- proveedor "simulado" (pruebas sin API keys)
+_SIM_N: dict = {}
+_SIM_CALLS: dict = {}
+_SIM_PLAN = ["Verificar el entorno", "Probar salida larga y un error", "Cerrar la tarea"]
+_SIM_CMDS = [
+    ['echo "Hola desde Neurotok"', "python --version"],
+    ["seq 1 80", "ls carpeta_que_no_existe", "ls ~"],
+    ['echo "Tarea terminada"'],
+]
+
+
+def _simulado(n: Neurona, system: str, user: str) -> str:
+    """IA falsa con guion fijo: ejecuta comandos reales en Termux sin gastar cuota."""
+    time.sleep(1.2)
+    _SIM_N[n.id] = _SIM_N.get(n.id, 0) + 1
+    if n.id == "crea_sim_1" and _SIM_N[n.id] == 2:
+        raise RateLimitError(20.0)  # simula quedarse sin cuota: pasa a crea_sim_2
+    if "Sub-Cerebro Arquitecto" in system:
+        _SIM_CALLS.clear()
+        return json.dumps({"pasos": _SIM_PLAN})
+    m = re.search(r"Paso (\d+)/", user)
+    i = int(m.group(1)) if m else 1
+    cmds = _SIM_CMDS[(i - 1) % len(_SIM_CMDS)]
+    k = _SIM_CALLS.get(i, 0)
+    _SIM_CALLS[i] = k + 1
+    if k < len(cmds):
+        return json.dumps({"pensamiento": f"Simulación, paso {i}", "comando": cmds[k], "estado": "CONTINUAR"})
+    return json.dumps({"pensamiento": "Paso completo", "comando": "", "estado": "FINALIZADO"})
+
+
 def call_llm(n: Neurona, system: str, user: str) -> str:
     """Envía (system, user) y devuelve el texto de la respuesta."""
     p = n.proveedor
+    if p == "simulado":
+        return _simulado(n, system, user)
     try:
         if p == "gemini":
             model = n.modelo or GEMINI_MODEL
