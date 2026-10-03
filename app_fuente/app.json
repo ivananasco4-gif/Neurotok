@@ -12,9 +12,10 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#F8F9FD"
+        "backgroundColor": "#0b0b0d"
       },
-      "package": "com.ivananasco4.neurotok"
+      "package": "com.ivananasco4.neurotok",
+      "versionCode": 1
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -22,7 +23,10 @@
     "splash": {
       "image": "./assets/logo.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    }
+      "backgroundColor": "#0b0b0d"
+    },
+    "plugins": [
+      "./plugins/withLocalhostCleartext"
+    ]
   }
 }
