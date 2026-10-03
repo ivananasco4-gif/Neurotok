@@ -128,13 +128,13 @@ export function buildVaultGraph(tareas) {
     const pasoNodes = [];
     (t.pasos || []).forEach((p) => {
       const cs = p.comandos || [];
-      const cmdNodes = cs.map((c, i) => add(c.id, 420, y + i * 46, 200, 40, {
-        kind: 'cmd', full: c.cmd, t: cut(c.cmd, 24), mono: true,
+      const cmdNodes = cs.map((c, i) => add(`c:${c.id}`, 420, y + i * 46, 200, 40, {
+        kind: 'cmd', rawId: c.id, full: c.cmd, t: cut(c.cmd, 24), mono: true,
         s: c.estado === 'en_curso' ? 'ejecutando…' : `exit ${c.exit}`,
         glyph: GLYPH[c.estado] || 'free', dashed: c.estado === 'fallo', active: c.estado === 'en_curso' }));
       const blockH = Math.max(1, cs.length) * 46 - 6;
-      const pn = add(p.id, 210, y + blockH / 2 - 24, 160, 48, {
-        kind: 'paso', full: p.titulo, t: cut(p.titulo, 16), s: `${cs.length} comando${cs.length === 1 ? '' : 's'}`,
+      const pn = add(`p:${p.id}`, 210, y + blockH / 2 - 24, 160, 48, {
+        kind: 'paso', rawId: p.id, full: p.titulo, t: cut(p.titulo, 16), s: `${cs.length} comando${cs.length === 1 ? '' : 's'}`,
         glyph: GLYPH[p.estado] || 'free', dashed: p.estado === 'fallo', active: p.estado === 'en_curso' });
       cmdNodes.forEach((cn) => link(`${p.id}-${cn.id}`, pn, cn, cn.active));
       pasoNodes.push(pn);
@@ -142,8 +142,8 @@ export function buildVaultGraph(tareas) {
     });
     const mid = pasoNodes.length
       ? (pasoNodes[0].y + pasoNodes[pasoNodes.length - 1].y) / 2 : y - 24;
-    const tn = add(t.id, 0, mid, 170, 48, {
-      kind: 'tarea', full: t.titulo, t: cut(t.titulo, 18), s: `${(t.pasos || []).length} pasos · ${t.estado}`,
+    const tn = add(`t:${t.id}`, 0, mid, 170, 48, {
+      kind: 'tarea', rawId: t.id, full: t.titulo, t: cut(t.titulo, 18), s: `${(t.pasos || []).length} pasos · ${t.estado}`,
       glyph: GLYPH[t.estado] || 'free', dashed: t.estado === 'fallo', active: t.estado === 'en_curso' });
     pasoNodes.forEach((pn) => link(`${t.id}-${pn.id}`, tn, pn, pn.active));
     y += 30;

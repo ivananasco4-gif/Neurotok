@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Image, Modal, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput,
   TouchableOpacity, View } from 'react-native';
 import { demoInit, demoSnapshot, demoTick, demoVault } from './src/mock';
-import { auth, fetchAll, runGoal, stopRun } from './src/api';
+import { auth, bovedaPost, fetchAll, getFallidos, getGrafo, runGoal, stopRun } from './src/api';
 import Canvas from './src/Canvas';
 import { buildGraph, buildVaultGraph } from './src/layout';
 import { deleteNode, editNode } from './src/vaultOps';
@@ -121,6 +121,12 @@ function Estado({ snap }) {
         <Text style={s.txt}>Tokens crudos ≈ {m.tokens_crudos_aprox} → limpios ≈ {m.tokens_limpios_aprox}</Text>
         <Text style={s.big}>{m.ahorro_pct}%</Text>
         <View style={s.barBg}><View style={[s.barFg, { width: `${Math.min(100, m.ahorro_pct)}%` }]} /></View>
+        {m.consultas_boveda != null && (
+          <Text style={[s.mut, { marginTop: 4 }]}>
+            Consultas a la bóveda: {m.consultas_boveda} · fragmentos inyectados: {m.fragmentos_inyectados} · repetidos rechazados: {m.rechazos_repetidos} · fallidos activos: {m.fallidos_activos} · búsqueda {m.busqueda_fts5 ? 'FTS5' : 'básica'}
+          </Text>
+        )}
+        {m.ahorro_busqueda_pct != null && <Text style={s.mut}>Ahorro por búsqueda (indicador, no tokens exactos): {m.ahorro_busqueda_pct}%</Text>}
       </Card>
       <Text style={s.h}>Consola sanitizada</Text>
       <Consola md={snap.flow.consola_md} />
@@ -128,10 +134,7 @@ function Estado({ snap }) {
   );
 }
 
-function Fallidos({ vault, setVault }) {
-  const list = vault.fallidos;
-  const upd = (id, patch) => setVault((v) => ({ ...v, fallidos: v.fallidos.map((f) => (f.id === id ? { ...f, ...patch } : f)) }));
-  const del = (id) => setVault((v) => ({ ...v, fallidos: v.fallidos.filter((f) => f.id !== id) }));
+function Fallidos({ list, onRehab, onDel }) {
   return (
     <ScrollView contentContainerStyle={s.pad}>
       <Text style={s.mut}>La IA recibe estos comandos como "no repetir". Rehabilita uno si el entorno cambió.</Text>
@@ -144,8 +147,8 @@ function Fallidos({ vault, setVault }) {
           {!!f.solucion && <Text style={[s.txt, { marginTop: 6 }]}>↳ {f.solucion}</Text>}
           {f.rehabilitado && <Text style={[s.label, { marginTop: 6 }]}>REHABILITADO · SE PERMITE DE NUEVO</Text>}
           <View style={[s.row, { marginTop: 10 }]}>
-            <Btn onPress={() => upd(f.id, { rehabilitado: !f.rehabilitado })}>{f.rehabilitado ? 'Volver a bloquear' : 'Rehabilitar'}</Btn>
-            <Btn onPress={() => del(f.id)}>Borrar</Btn>
+            <Btn onPress={() => onRehab(f)}>{f.rehabilitado ? 'Volver a bloquear' : 'Rehabilitar'}</Btn>
+            <Btn onPress={() => onDel(f)}>Borrar</Btn>
           </View>
         </View>
       ))}
@@ -155,15 +158,52 @@ function Fallidos({ vault, setVault }) {
 
 const KIND = { tarea: 'tarea', paso: 'paso', cmd: 'comando' };
 
-function Boveda({ snap, mode, vault, setVault }) {
+function Boveda({ snap, mode, url, vault, setVault }) {
+  const live = mode === 'api';
   const [sec, setSec] = useState('estado');
   const [edit, setEdit] = useState(null);
   const [text, setText] = useState('');
-  const graph = useMemo(() => buildVaultGraph(vault.tareas), [vault.tareas]);
-  const open = (n) => { setEdit(n); setText(n.full || ''); };
-  const save = () => { setVault((v) => ({ ...v, tareas: editNode(v.tareas, edit.id, text) })); setEdit(null); };
-  const borrar = () => { setVault((v) => ({ ...v, tareas: deleteNode(v.tareas, edit.id) })); setEdit(null); };
-  const aviso = (t) => <View style={s.pad}><Text style={s.mut}>{t}</Text></View>;
+  const [msg, setMsg] = useState('');
+  const [api, setApi] = useState({ tareas: [], fallidos: [], err: '' });
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
+
+  const load = async () => {
+    try {
+      const [g, f] = await Promise.all([getGrafo(url), getFallidos(url)]);
+      if (alive.current) setApi({ tareas: g.tareas || [], fallidos: Array.isArray(f) ? f : (f.fallidos || []), err: '' });
+    } catch (e) { if (alive.current) setApi((a) => ({ ...a, err: String(e.message || e) })); }
+  };
+  useEffect(() => {
+    if (!live || sec === 'estado') return undefined;
+    load();
+    const id = setInterval(load, 2000);
+    return () => clearInterval(id);
+  }, [live, sec, url]);
+
+  const tareas = live ? api.tareas : vault.tareas;
+  const fallidos = live ? api.fallidos : vault.fallidos;
+  const graph = useMemo(() => buildVaultGraph(tareas), [tareas]);
+
+  const open = (n) => { setEdit(n); setText(n.full || ''); setMsg(''); };
+  const run = async (fn) => { try { await fn(); setEdit(null); if (live) load(); } catch (e) { setMsg(String(e.message || e)); } };
+  const save = () => run(async () => {
+    if (live) await bovedaPost(url, 'editar', { tipo: KIND[edit.kind], id: edit.rawId, [edit.kind === 'cmd' ? 'cmd' : 'titulo']: text });
+    else setVault((v) => ({ ...v, tareas: editNode(v.tareas, edit.rawId, text) }));
+  });
+  const borrar = () => run(async () => {
+    if (live) await bovedaPost(url, 'borrar', { tipo: KIND[edit.kind], id: edit.rawId });
+    else setVault((v) => ({ ...v, tareas: deleteNode(v.tareas, edit.rawId) }));
+  });
+  const onRehab = (f) => {
+    if (live) { bovedaPost(url, 'rehabilitar', { id: f.id, valor: !f.rehabilitado }).then(load).catch((e) => setApi((a) => ({ ...a, err: String(e.message || e) }))); return; }
+    setVault((v) => ({ ...v, fallidos: v.fallidos.map((x) => (x.id === f.id ? { ...x, rehabilitado: !x.rehabilitado } : x)) }));
+  };
+  const onDel = (f) => {
+    if (live) { bovedaPost(url, 'borrar', { tipo: 'fallido', id: f.id }).then(load).catch((e) => setApi((a) => ({ ...a, err: String(e.message || e) }))); return; }
+    setVault((v) => ({ ...v, fallidos: v.fallidos.filter((x) => x.id !== f.id) }));
+  };
+
   return (
     <View style={{ flex: 1 }}>
       <View style={s.seg}>
@@ -173,14 +213,13 @@ function Boveda({ snap, mode, vault, setVault }) {
           </TouchableOpacity>
         ))}
       </View>
+      {live && sec !== 'estado' && !!api.err && <Text style={[s.mut, { paddingHorizontal: 14, paddingBottom: 6 }]}>⚠ {api.err}</Text>}
       {sec === 'estado' && <Estado snap={snap} />}
-      {sec === 'grafo' && (mode === 'demo'
-        ? <Canvas graph={graph} storageKey="neurotok:pos:boveda" onNodePress={open}
-            emptyText="La bóveda aún no tiene tareas" />
-        : aviso('El grafo real se conecta cuando la bóveda guarde tareas y comandos estructurados (próxima fase). Por ahora usa el modo Demo.'))}
-      {sec === 'fallidos' && (mode === 'demo'
-        ? <Fallidos vault={vault} setVault={setVault} />
-        : aviso('La reserva real de fallidos se conecta en la próxima fase. Por ahora usa el modo Demo.'))}
+      {sec === 'grafo' && (
+        <Canvas key={live ? 'api' : 'demo'} graph={graph} storageKey={live ? 'neurotok:pos:boveda-api' : 'neurotok:pos:boveda'}
+          onNodePress={open} emptyText="La bóveda aún no tiene tareas" />
+      )}
+      {sec === 'fallidos' && <Fallidos list={fallidos} onRehab={onRehab} onDel={onDel} />}
       <Modal visible={!!edit} transparent animationType="fade" onRequestClose={() => setEdit(null)}>
         <View style={s.modalBg}>
           <View style={s.modal}>
@@ -188,6 +227,7 @@ function Boveda({ snap, mode, vault, setVault }) {
             <TextInput style={[s.input, { minHeight: 80, fontFamily: edit?.kind === 'cmd' ? MONO : undefined }]}
               multiline value={text} onChangeText={setText} autoCapitalize="none" autoCorrect={false} />
             {edit?.kind !== 'cmd' && <Text style={[s.mut, { marginTop: 6 }]}>Borrar también elimina lo que cuelga de este nodo.</Text>}
+            {!!msg && <Text style={[s.txt, { marginTop: 6 }]}>⚠ {msg}</Text>}
             <View style={[s.row, { marginTop: 12 }]}>
               <Btn on onPress={save}>Guardar</Btn>
               <Btn onPress={borrar}>Borrar</Btn>
@@ -257,7 +297,7 @@ export default function App() {
       </View>
       <View style={{ flex: 1 }}>
         {tab === 'L' && <Lienzo snap={snap} />}
-        {tab === 'B' && <Boveda {...{ snap, mode, vault, setVault }} />}
+        {tab === 'B' && <Boveda {...{ snap, mode, url, vault, setVault }} />}
         {tab === 'S' && <Ajustes {...{ mode, setMode, url, setUrl, token, setToken, err }} />}
       </View>
       <View style={s.tabs}>

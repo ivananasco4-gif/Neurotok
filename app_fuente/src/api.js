@@ -20,3 +20,7 @@ export const runGoal = (base, objetivo) =>
   j(base, '/run', { method: 'POST', body: JSON.stringify({ objetivo }) });
 
 export const stopRun = (base) => j(base, '/stop', { method: 'POST' });
+
+export const getGrafo = (base) => j(base, '/boveda/grafo');
+export const getFallidos = (base) => j(base, '/boveda/fallidos');
+export const bovedaPost = (base, ruta, body) => j(base, `/boveda/${ruta}`, { method: 'POST', body: JSON.stringify(body) });
