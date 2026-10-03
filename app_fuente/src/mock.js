@@ -88,3 +88,104 @@ export const demoVault = () => ({
       tarea: 'Crear API REST de ejemplo', veces: 2, solucion: '', rehabilitado: false },
   ],
 });
+
+// ---- Chat y Terminal simuladas (Tarea 2): misma forma que el contrato de la API
+const D = { term: [], chat: [], pend: [], modo: 'manual', id: 1, seeded: false };
+const hora = () => new Date().toTimeString().slice(0, 8);
+const tl = (tipo, texto, crudo = null) => { D.term.push({ n: D.term.length, t: hora(), tipo, texto, crudo }); };
+const cm = (rol, texto) => { D.chat.push({ n: D.chat.length, rol, texto, t: hora() }); };
+const enqueue = (cmd, pensamiento, paso, riesgo = false) => { D.pend.push({ id: D.id++, cmd, pensamiento, paso, riesgo }); };
+
+export function demoReset() {
+  D.term = []; D.chat = []; D.pend = []; D.modo = 'manual'; D.id = 1; D.seeded = false;
+}
+
+function seed() {
+  if (D.seeded) return;
+  D.seeded = true;
+  tl('info', 'Sesión de demostración: nada de esto se ejecuta de verdad.');
+  cm('sistema', 'Modo Demo: todo es simulado.');
+  cm('cerebro', 'Hola. Dime un objetivo y te propongo los comandos para cumplirlo.');
+  cm('tu', 'Crea hola.py que imprima Neurotok y ejecútalo');
+  cm('cerebro', 'Entendido. Son 3 pasos. Revisa la pestaña Terminal: ahí te pido aprobación para cada comando.');
+  enqueue('pkg install -y python', 'Necesito Python instalado para poder ejecutar el script.', 1);
+  enqueue("printf 'print(\"Neurotok\")\\n' > hola.py", 'Creo hola.py con una sola línea.', 2);
+  enqueue('rm -rf ~/proyectos_ia/viejo', 'Limpio una carpeta antigua que estorba antes de seguir.', 3, true);
+}
+
+function ejecutar(cmd) {
+  tl('cmd', cmd);
+  if (/^pkg install/.test(cmd)) {
+    tl('out', 'python ya está instalado (3.12.7)',
+      'Reading package lists... Done\nBuilding dependency tree... Done\npython is already the newest version (3.12.7).\n0 upgraded, 0 newly installed, 0 to remove.');
+  } else if (/^python3? hola\.py/.test(cmd)) {
+    tl('out', 'Neurotok');
+  } else if (/^echo /.test(cmd)) {
+    tl('out', cmd.slice(5).replace(/^["']|["']$/g, ''));
+  } else if (/^ls\b/.test(cmd)) {
+    tl('out', 'hola.py', '-rw------- 1 u0_a217 u0_a217 22 Oct  3 17:20 hola.py\ntotal 4');
+  } else if (/^(rm|printf|mkdir|cat)\b/.test(cmd)) {
+    tl('out', '(sin salida)', '');
+  } else {
+    tl('err', 'demo: este comando no está simulado', `bash: ${cmd.split(' ')[0]}: simulado`);
+  }
+}
+
+function cerrarCola() {
+  if (!D.pend.length) cm('cerebro', 'Listo: la cola está vacía. Cuéntame el siguiente objetivo.');
+}
+
+export const demoApi = {
+  terminal: async (desde = 0) => { seed(); return { siguiente: D.term.length, lineas: D.term.slice(desde) }; },
+  pending: async () => {
+    seed();
+    if (D.modo === 'auto') { // en auto, lo que tiene riesgo sigue esperando a una persona
+      const i = D.pend.findIndex((p) => !p.riesgo);
+      if (i >= 0) {
+        const [p] = D.pend.splice(i, 1);
+        ejecutar(p.cmd);
+        cm('sistema', `Auto: ejecutado ${p.cmd}`);
+        cerrarCola();
+      }
+    }
+    return { modo: D.modo, exec_habilitado: true, pendientes: D.pend.map((p) => ({ ...p })) };
+  },
+  approve: async (id, cmd) => {
+    const i = D.pend.findIndex((p) => p.id === id);
+    if (i < 0) throw new Error('Ese comando ya no está pendiente');
+    const [p] = D.pend.splice(i, 1);
+    const final = cmd !== undefined ? cmd : p.cmd;
+    if (cmd !== undefined && cmd !== p.cmd) tl('info', 'Comando editado por ti antes de ejecutarlo');
+    ejecutar(final);
+    cm('sistema', `Ejecutado (paso ${p.paso}): ${final}`);
+    cerrarCola();
+    return { ok: true };
+  },
+  reject: async (id, motivo) => {
+    const i = D.pend.findIndex((p) => p.id === id);
+    if (i < 0) throw new Error('Ese comando ya no está pendiente');
+    const [p] = D.pend.splice(i, 1);
+    tl('info', `Rechazado: ${p.cmd}${motivo ? ` — ${motivo}` : ''}`);
+    cm('sistema', `Rechazaste: ${p.cmd}${motivo ? ` (${motivo})` : ''}`);
+    if (!D.pend.length) {
+      cm('cerebro', 'Entendido, no lo ejecuto. Pruebo otro camino.');
+      enqueue('ls -la ~/proyectos_ia', 'Antes de tocar nada, miro qué hay en la carpeta.', p.paso);
+    }
+    return { ok: true };
+  },
+  modo: async (modo) => {
+    if (modo !== 'manual' && modo !== 'auto') throw new Error('modo inválido');
+    D.modo = modo;
+    tl('info', `Modo de aprobación: ${modo}`);
+    return { ok: true };
+  },
+  exec: async (cmd) => { ejecutar(cmd); return { ok: true }; },
+  chat: async (desde = 0) => { seed(); return { siguiente: D.chat.length, mensajes: D.chat.slice(desde) }; },
+  chatPost: async (texto) => {
+    seed();
+    cm('tu', texto);
+    cm('cerebro', `Objetivo recibido: "${texto}". Te propongo el primer comando en la Terminal.`);
+    setTimeout(() => enqueue('ls -la ~/proyectos_ia', 'Empiezo viendo el estado de la carpeta de proyectos.', 1), 1200);
+    return { ok: true };
+  },
+};

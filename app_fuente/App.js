@@ -4,6 +4,8 @@ import { Animated, Image, Modal, Platform, SafeAreaView, ScrollView, StatusBar, 
 import { demoInit, demoSnapshot, demoTick, demoVault } from './src/mock';
 import { auth, bovedaPost, fetchAll, getFallidos, getGrafo, runGoal, stopRun } from './src/api';
 import Canvas from './src/Canvas';
+import Chat from './src/Chat';
+import Terminal from './src/Terminal';
 import { buildGraph, buildVaultGraph } from './src/layout';
 import { deleteNode, editNode } from './src/vaultOps';
 import { T } from './src/theme';
@@ -274,10 +276,10 @@ function Ajustes({ mode, setMode, url, setUrl, token, setToken, err }) {
 }
 
 // ---------------------------------------------------------------- App
-const TABS = [['L', 'Lienzo'], ['B', 'Bóveda'], ['S', 'Ajustes']];
+const TABS = [['C', 'Chat'], ['T', 'Terminal'], ['L', 'Lienzo'], ['B', 'Bóveda'], ['S', 'Ajustes']];
 
 export default function App() {
-  const [tab, setTab] = useState('L');
+  const [tab, setTab] = useState('C');
   const [mode, setMode] = useState('demo');
   const [url, setUrl] = useState('http://127.0.0.1:8000');
   const [token, setToken] = useState('');
@@ -296,6 +298,8 @@ export default function App() {
         </Text>
       </View>
       <View style={{ flex: 1 }}>
+        {tab === 'C' && <Chat mode={mode} url={url} status={snap.status} />}
+        {tab === 'T' && <Terminal mode={mode} url={url} />}
         {tab === 'L' && <Lienzo snap={snap} />}
         {tab === 'B' && <Boveda {...{ snap, mode, url, vault, setVault }} />}
         {tab === 'S' && <Ajustes {...{ mode, setMode, url, setUrl, token, setToken, err }} />}
