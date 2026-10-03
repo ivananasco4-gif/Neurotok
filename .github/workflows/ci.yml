@@ -1,0 +1,29 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compilar el backend
+        run: python -m py_compile backend/*.py
+      - name: Prueba de la boveda
+        run: python backend/boveda_db.py
+  app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Instalar dependencias
+        working-directory: app_fuente
+        run: if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+      - name: Empaquetar la app (comprueba que compila)
+        working-directory: app_fuente
+        run: npx expo export --platform android --output-dir /tmp/export

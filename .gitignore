@@ -7,3 +7,7 @@ backend/cuentas.json
 .env
 *.token
 boveda_ia/
+app_fuente/node_modules/
+app_fuente/android/
+app_fuente/ios/
+app_fuente/.expo/

@@ -154,7 +154,7 @@ class AgentLoop:
         tid, paso_ids, t0 = None, [], time.time()
         try:
             RUNTIME.set(estado="PLANIFICANDO", etapa=1)
-            plan = self._ask(["arquitecto", "orquestador"], SYS_ARQ,
+            plan = self._ask(["orquestador", "arquitecto"], SYS_ARQ,
                              f"Objetivo: {objetivo}", ("pasos",))
             pasos = [str(p) for p in plan["pasos"]][:10] or [objetivo]
             total = len(pasos)

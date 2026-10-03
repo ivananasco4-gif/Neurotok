@@ -71,16 +71,23 @@ export function buildGraph(neuronas, idx, running) {
     dashed: n.estado === 'EN_PAUSA', dim: n.estado === 'EN_PAUSA' });
 
   const humano = add('humano', CX, 0, 168, 52, { kind: 'main', t: 'Tú · Cerebelo', s: 'Idea / tarea', active: idx === 0 });
-  const cerebro = add('cerebro', CX, 100, 168, 52, { kind: 'main', t: 'Gemini · Cerebro', s: 'Orquestador', active: !!running });
-  link('humano-cerebro', humano, 'b', cerebro, 't', idx === 0);
-
+  // Un nodo-cerebro por cada neurona con rol orquestador. Reparte la que está trabajando o,
+  // si no, la primera con cuota (DISPONIBLE); las demás quedan en espera como respaldo.
+  const PROV = { gemini: 'Gemini', groq: 'Groq', claude: 'Claude', deepseek: 'DeepSeek', grok: 'Grok', qwen: 'Qwen', kimi: 'Kimi', simulado: 'Simulado' };
   const orq = by('orquestador');
-  orq.forEach((n, i) => {
-    const nn = neuronNode(n, CX + 210, 106 + i * 46);
-    link(`orq-${n.id}`, cerebro, 'r', nn, 'l', n.estado === 'TRABAJANDO');
-  });
+  const lead = orq.find((n) => n.estado === 'TRABAJANDO') || orq.find((n) => n.estado === 'DISPONIBLE') || orq[0];
+  const cerebros = orq.length
+    ? orq.map((n, i) => add(`cerebro:${n.id}`, CX + (i - (orq.length - 1) / 2) * 190, 100, 168, 52, {
+      kind: 'main', t: `${PROV[n.proveedor] || n.proveedor} · Cerebro`,
+      s: n.estado === 'EN_PAUSA' ? `COOLDOWN ${mmss(n.cooldown_restante_s)}` : n === lead ? 'Cerebro activo' : 'En espera',
+      glyph: n.estado === 'TRABAJANDO' ? 'run' : n.estado === 'EN_PAUSA' ? 'pause' : 'free',
+      dashed: n.estado === 'EN_PAUSA', dim: n.estado === 'EN_PAUSA',
+      active: n.estado === 'TRABAJANDO' || (!!running && n === lead) }))
+    : [add('cerebro', CX, 100, 168, 52, { kind: 'main', t: 'Cerebro', s: 'Sin orquestador', active: !!running })];
+  const cerebro = cerebros[orq.length ? orq.indexOf(lead) : 0];
+  cerebros.forEach((c) => link(`humano-${c.id}`, humano, 'b', c, 't', idx === 0 && c === cerebro));
 
-  const row2 = Math.max(230, 100 + orq.length * 46 + 70);
+  const row2 = 230;
   const subs = [
     ['arquitecto', -200, 'Arquitecto', 'Planificación', 1],
     ['creador', 0, 'Creador / Code', 'Genera comandos', 2],
@@ -91,7 +98,7 @@ export function buildGraph(neuronas, idx, running) {
   subs.forEach(([rol, dx, t, s, stage]) => {
     const active = idx === stage || working(rol);
     const sub = add(`sub_${rol}`, CX + dx, row2, 150, 48, { kind: 'main', t, s, active });
-    link(`cerebro-${rol}`, cerebro, 'b', sub, 't', active);
+    cerebros.forEach((c) => link(`${c.id}-${rol}`, c, 'b', sub, 't', active && c === cerebro));
     const list = by(rol);
     list.forEach((n, i) => {
       const nn = neuronNode(n, CX + dx + 90, row2 + 48 + 34 + i * 46);
@@ -111,7 +118,7 @@ export function buildGraph(neuronas, idx, running) {
   link('termux-sanit', termux, 'b', sanit, 't', idx === 4);
   link('sanit-lectora', sanit, 'b', lectora, 't', idx === 5);
   link('lectora-boveda', lectora, 'b', boveda, 't', idx === 5);
-  link('boveda-cerebro', boveda, 'l', cerebro, 'l', idx === 5, 240);
+  link('boveda-cerebro', boveda, 'l', cerebros[0], 'l', idx === 5, 240);
   return { nodes, edges };
 }
 
