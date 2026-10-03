@@ -24,3 +24,13 @@ export const stopRun = (base) => j(base, '/stop', { method: 'POST' });
 export const getGrafo = (base) => j(base, '/boveda/grafo');
 export const getFallidos = (base) => j(base, '/boveda/fallidos');
 export const bovedaPost = (base, ruta, body) => j(base, `/boveda/${ruta}`, { method: 'POST', body: JSON.stringify(body) });
+
+// ---- Chat + Terminal
+export const getTerminal = (base, desde = 0) => j(base, `/terminal?desde=${encodeURIComponent(desde)}`);
+export const getPending = (base) => j(base, '/pending');
+export const approve = (base, id, cmd) => j(base, '/approve', { method: 'POST', body: JSON.stringify(cmd == null ? { id } : { id, cmd }) });
+export const reject = (base, id, motivo) => j(base, '/reject', { method: 'POST', body: JSON.stringify(motivo ? { id, motivo } : { id }) });
+export const setModo = (base, modo) => j(base, '/modo', { method: 'POST', body: JSON.stringify({ modo }) });
+export const execManual = (base, cmd) => j(base, '/exec', { method: 'POST', body: JSON.stringify({ cmd }) });
+export const getChat = (base, desde = 0) => j(base, `/chat?desde=${encodeURIComponent(desde)}`);
+export const postChat = (base, texto) => j(base, '/chat', { method: 'POST', body: JSON.stringify({ texto }) });
