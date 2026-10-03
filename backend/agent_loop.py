@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from boveda_db import BovedaDB
+from prompt_filter import filtrar
 from sanitizer import sanitize
 from vault_manager import VaultManager
 from worker_pool import (AuthError, LLMError, RateLimitError, WorkerPool, call_llm)
@@ -150,16 +151,19 @@ class AgentLoop:
     # ---- bucle principal
     def run(self, objetivo: str) -> None:
         self.stop_event.clear()
+        pedido = filtrar(objetivo)  # filtro Markdown de entrada: el cerebro recibe el pedido ya limpio
+        self.vault.record_savings(pedido.raw_chars, pedido.md_chars)
+        objetivo = pedido.titulo
         RUNTIME.reset(objetivo)
         tid, paso_ids, t0 = None, [], time.time()
         try:
             RUNTIME.set(estado="PLANIFICANDO", etapa=1)
             plan = self._ask(["orquestador", "arquitecto"], SYS_ARQ,
-                             f"Objetivo: {objetivo}", ("pasos",))
+                             pedido.md, ("pasos",))
             pasos = [str(p) for p in plan["pasos"]][:10] or [objetivo]
             total = len(pasos)
             RUNTIME.set(total=total, estado="EJECUTANDO")
-            tid, paso_ids = self.db.nueva_tarea(objetivo, pasos)
+            tid, paso_ids = self.db.nueva_tarea(objetivo, pasos, pedido.md)
             self.vault.update_state(objetivo, 1, total, "Plan creado", pasos[0])
             it_global, fallos, last_md = 0, 0, "(primer turno)"
 

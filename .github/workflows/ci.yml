@@ -14,6 +14,8 @@ jobs:
         run: python -m py_compile backend/*.py
       - name: Prueba de la boveda
         run: python backend/boveda_db.py
+      - name: Prueba del filtro de entrada
+        run: python backend/prompt_filter.py
   app:
     runs-on: ubuntu-latest
     steps:

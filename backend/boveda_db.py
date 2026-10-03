@@ -134,6 +134,10 @@ class BovedaDB:
         self.lock = threading.RLock()
         with self._tx() as c:
             c.executescript(SCHEMA)
+            try:  # bases ya creadas: añadir la columna del pedido en Markdown
+                c.execute("ALTER TABLE tareas ADD COLUMN pedido_md TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
             row = c.execute("SELECT sql FROM sqlite_master WHERE name='docs'").fetchone()
             if row is None:
                 for tok in ("unicode61 remove_diacritics 2", "unicode61"):
@@ -171,10 +175,11 @@ class BovedaDB:
 
     # ------------------------------------------------------------ registro estructurado
     @_seguro((None, []))
-    def nueva_tarea(self, objetivo: str, pasos: list[str]):
+    def nueva_tarea(self, objetivo: str, pasos: list[str], pedido_md: str = ""):
         with self._tx() as c:
-            tid = c.execute("INSERT INTO tareas(titulo,estado,creado) VALUES(?,?,?)",
-                            (_cut(limpiar(objetivo), 300), "en_curso", time.time())).lastrowid
+            tid = c.execute("INSERT INTO tareas(titulo,estado,creado,pedido_md) VALUES(?,?,?,?)",
+                            (_cut(limpiar(objetivo), 300), "en_curso", time.time(),
+                             limpiar(pedido_md)[:4000])).lastrowid
             pids = [c.execute("INSERT INTO pasos(tarea_id,titulo,estado,orden) VALUES(?,?,?,?)",
                               (tid, _cut(limpiar(p), 300), "en_curso", i)).lastrowid
                     for i, p in enumerate(pasos, 1)]
@@ -332,7 +337,7 @@ class BovedaDB:
             c.execute("DELETE FROM docs WHERE tarea_id=?", (tid,))
             if not t:
                 return
-            lineas = []
+            lineas = [f"Pedido: {x.strip()}" for x in (t["pedido_md"] or "").splitlines() if x.strip()]
             for p, cmds in pasos:
                 lineas.append(f"Paso: {p['titulo']} ({p['estado']})")
                 lineas += [f"Comando ok: {x['cmd']}" for x in cmds if x["estado"] == "ok"]
@@ -355,6 +360,8 @@ class BovedaDB:
               f"# {t['titulo']}", "", f"Proyecto: [[{proyecto}]]"]
         if t["proyecto_dudoso"]:
             md.append(f"> ¿Es del proyecto [[{t['proyecto_dudoso']}]]? Confírmalo con POST /boveda/proyecto.")
+        if t["pedido_md"]:
+            md += ["", "## Pedido", t["pedido_md"]]
         md += ["", "## Pasos"]
         for i, (p, cmds) in enumerate(pasos, 1):
             md.append(f"{i}. {p['titulo']} - {p['estado']}")
