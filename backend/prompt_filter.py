@@ -19,12 +19,24 @@ PH = re.compile(f"{A}(\\d+){B}")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 MAX_PARRAFO = 60                    # párrafo sin cercar de más de N líneas = texto pegado: 5 primeras + 10 últimas
 
-RELLENO = re.compile(r"""(?ix)
-  (?:^|(?<=[\s,.;:!?¿¡]))
-  (?: hola | buenas(?:\s+(?:tardes|noches|d[ií]as))? | buen(?:os)?\s+d[ií]as | hey | oye | ok(?:ey)?
-    | por\s+favor | porfa(?:vor)? | please | gracias(?:\s+de\s+antemano)? | muchas\s+gracias | thanks
-    | si\s+(?:puedes|podes|podés) | si\s+no\s+es\s+molestia | te\s+agradezco | te\s+agradecer[ií]a )
-  (?=$|[\s,;:!?]|\.(?:\s|$))""")
+# Saludos y cortesías: solo se quitan al EMPEZAR o al TERMINAR una frase, nunca en medio
+# ("imprime hola Neurotok" o "una página de gracias" no deben perder palabras).
+_INI = (r"hola|buenas(?:\s+(?:tardes|noches|d[ií]as))?|buen(?:os)?\s+d[ií]as|hey|oye|ok(?:ey)?|por\s+favor"
+        r"|porfa(?:vor)?|please|si\s+(?:puedes|podes|podés)|si\s+no\s+es\s+molestia|te\s+agradezco|te\s+agradecer[ií]a")
+_FIN = (r"gracias(?:\s+de\s+antemano)?|muchas\s+gracias|thanks|por\s+favor|porfa(?:vor)?|please"
+        r"|te\s+agradezco|te\s+agradecer[ií]a")
+INICIO = re.compile(rf"(?i)^(?:(?:{_INI})(?=$|[\s,;:!?]|\.(?:\s|$))[\s,;:!?.]*)+")
+FINAL = re.compile(rf"(?i)(?:^|[,;:!?.]\s*)(?:{_FIN})[\s,;:!?.]*$")
+
+
+def _sin_relleno(s: str) -> str:
+    s = INICIO.sub("", s.strip())
+    for _ in range(3):
+        n = FINAL.sub("", s)
+        if n == s:
+            break
+        s = n
+    return s
 
 
 @dataclass
@@ -64,7 +76,7 @@ def _colapsar(lineas: list[str]) -> list[str]:
 
 
 def _limpiar_frase(s: str) -> str:
-    s = RELLENO.sub(" ", s)
+    s = _sin_relleno(s)
     s = re.sub(r"\s+([,.;:!?])", r"\1", s)
     s = re.sub(r"([,;:])(\s*[,;:])+", r"\1", s)
     s = re.sub(r"([!?])\1{1,}", r"\1", s)

@@ -42,6 +42,10 @@ class LLMError(Exception):
     pass
 
 
+class ModelError(LLMError):
+    """Modelo inexistente o petición mal formada (HTTP 400/404): no sirve reintentar con esta neurona."""
+
+
 @dataclass
 class Neurona:
     id: str
@@ -54,6 +58,7 @@ class Neurona:
     cooldown_hasta: float = 0.0
     usos: int = 0
     errores: int = 0
+    ultimo_error: str = ""
 
     def cooldown_restante(self) -> int:
         return max(0, int(self.cooldown_hasta - time.time()))
@@ -90,11 +95,13 @@ class WorkerPool:
         with self._lock:
             self._refresh()
             for rol in roles + [None]:
-                for n in self.neuronas:
-                    if n.estado == DISPONIBLE and (rol is None or n.rol_sugerido == rol):
-                        n.estado = TRABAJANDO
-                        n.usos += 1
-                        return n
+                libres = [n for n in self.neuronas
+                          if n.estado == DISPONIBLE and (rol is None or n.rol_sugerido == rol)]
+                if libres:
+                    n = min(libres, key=lambda x: x.usos)  # reparte el trabajo entre las neuronas
+                    n.estado = TRABAJANDO
+                    n.usos += 1
+                    return n
             return None
 
     def release(self, n: Neurona) -> None:
@@ -102,8 +109,10 @@ class WorkerPool:
             if n.estado == TRABAJANDO:
                 n.estado = DISPONIBLE
 
-    def cooldown(self, n: Neurona, segundos: float = DEFAULT_COOLDOWN) -> None:
+    def cooldown(self, n: Neurona, segundos: float = DEFAULT_COOLDOWN, motivo: str = "") -> None:
         with self._lock:
+            if motivo:
+                n.ultimo_error = motivo[:200]
             n.estado = EN_PAUSA
             n.cooldown_hasta = time.time() + segundos
             n.errores += 1
@@ -120,21 +129,38 @@ class WorkerPool:
             return [{
                 "id": n.id, "proveedor": n.proveedor, "rol": n.rol_sugerido, "estado": n.estado,
                 "cooldown_restante_s": n.cooldown_restante(), "usos": n.usos, "errores": n.errores,
+                "ultimo_error": n.ultimo_error,
             } for n in self.neuronas]
 
 
 # ---------------------------------------------------------------- llamadas a proveedores
+def _espera(resp: requests.Response) -> float:
+    """Cuánto esperar tras un 429: cabecera, 'retryDelay' de Gemini, o 1 h si la cuota es diaria."""
+    ra = resp.headers.get("retry-after")
+    try:
+        if ra:
+            return min(float(ra), 21600.0)
+    except ValueError:
+        pass
+    m = re.search(r'retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"', resp.text)
+    if m:
+        return min(float(m.group(1)) + 1, 21600.0)
+    low = resp.text.lower()
+    if any(k in low for k in ("perday", "per day", "per_day", "daily")):
+        return 3600.0
+    return DEFAULT_COOLDOWN
+
+
 def _check(resp: requests.Response) -> None:
     if resp.status_code == 429:
-        try:
-            ra = float(resp.headers.get("retry-after", DEFAULT_COOLDOWN))
-        except ValueError:
-            ra = DEFAULT_COOLDOWN
-        raise RateLimitError(ra)
-    if resp.status_code in (401, 403):
-        raise AuthError(f"HTTP {resp.status_code}: credencial inválida")
+        raise RateLimitError(_espera(resp))
+    low = resp.text[:500].lower()
+    if resp.status_code in (401, 403) or "api key not valid" in low or "api_key_invalid" in low:
+        raise AuthError(f"HTTP {resp.status_code}: credencial inválida o sin permiso")
     if resp.status_code >= 500:
         raise RateLimitError(30.0)  # error del proveedor: pausa corta y rota
+    if resp.status_code in (400, 404):
+        raise ModelError(f"HTTP {resp.status_code}: {resp.text[:300]}")
     if not resp.ok:
         raise LLMError(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
