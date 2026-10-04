@@ -48,7 +48,7 @@ RUNNER = r"""D=@@D@@
 I=@@I@@
 cat -- "$D/hdr_$I"
 if cd -- @@CWD@@ 2>/dev/null; then
-  @@SHELL@@ "$D/cmd_$I" </dev/null > >(tee "$D/out_$I"; : > "$D/oend_$I") 2> >(tee "$D/err_$I" >&2; : > "$D/eend_$I")
+@@ENV@@  @@SHELL@@ "$D/cmd_$I" </dev/null > >(tee "$D/out_$I"; : > "$D/oend_$I") 2> >(tee "$D/err_$I" >&2; : > "$D/eend_$I")
   rc=$?
 else
   echo "[tmux] no se pudo entrar en el directorio de trabajo" >&2
@@ -65,7 +65,7 @@ def available() -> bool:
 
 class TmuxSession:
     def __init__(self, name: str = "neurotok", cwd: str | None = None, shell: str | None = None,
-                 scrub_env: bool = True, max_salida: int = 2_000_000) -> None:
+                 scrub_env: bool = True, max_salida: int = 2_000_000, env: dict | None = None) -> None:
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", name or ""):
             raise ValueError("name: solo letras, numeros, '_' y '-' (max 40)")
         self.name = name
@@ -73,6 +73,8 @@ class TmuxSession:
         self.shell = shell or shutil.which("bash") or "sh"
         self._bash = shutil.which("bash")   # el runner usa sustitucion de procesos: requiere bash
         self.scrub_env = scrub_env
+        # variables que se exportan a CADA comando (solo en su bash hijo; no tocan la shell del panel)
+        self.env = {k: str(v) for k, v in (env or {}).items() if NOMBRE_VAR.fullmatch(str(k))}
         self.max_salida = max(10_000, int(max_salida))
         self._lock = threading.RLock()
         self._dir: str | None = None
@@ -274,6 +276,7 @@ class TmuxSession:
                 self._escribir(ruta("hdr"), self._cabecera(cmd))
                 self._escribir(ruta("run"), (RUNNER.replace("@@D@@", shlex.quote(d)).replace("@@I@@", i)
                                              .replace("@@CWD@@", shlex.quote(self.cwd))
+                                             .replace("@@ENV@@", "".join(f"  export {k}={shlex.quote(v)}\n" for k, v in self.env.items()))
                                              .replace("@@SHELL@@", shlex.quote(self.shell))))
                 if not self._enviar_linea(f"{shlex.quote(self._bash)} {shlex.quote(ruta('run'))}"):
                     return 1, "", "[tmux] no se pudo escribir en la sesion", False
@@ -369,6 +372,10 @@ def _autoprueba() -> int:
         prueba("20000 lineas de salida", c == 0 and o.splitlines()[-1] == "20000", f"{len(o.splitlines())} lineas")
         c, o, e, t = s.run("head -c 200000 /dev/zero | tr '\\0' x; echo", timeout=60)
         prueba("una linea de 200 KB", c == 0 and len(o.strip()) == 200000, str(len(o)))
+        s_env = TmuxSession(nombre + "-env", cwd=trabajo, env={"NT_X": "a b'c", "NT_Y": "$HOME"})
+        c, o, e, t = s_env.run("echo \"[$NT_X][$NT_Y]\"")
+        s_env.close()
+        prueba("env: variables exportadas a cada comando (con comillas y $ intactos)", o == "[a b'c][$HOME]\n", repr((c, o, e)))
         c, o, e, t = s.run("read x; echo \"[$x]\"", timeout=20)
         prueba("stdin cerrado: no se cuelga esperando teclado", c == 0 and o == "[]\n", repr((c, o)))
         c, o, e, t = s.run("pwd; cd /; export NT_FOO=1")

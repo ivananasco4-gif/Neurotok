@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from boveda_db import BovedaDB
+from consola import CONSOLA, registrar_correccion
 from prompt_filter import filtrar
 from sanitizer import sanitize
 from vault_manager import VaultManager
@@ -33,6 +34,23 @@ RISKY = [re.compile(p) for p in (
     r"(curl|wget)[^|;]*\|\s*(ba|z)?sh", r"\brm\s+-\w*[rf]", r"\bchmod\b", r"\bchown\b",
     r"\bsudo\b|\bsu\b", r"\b(nc|ncat|socat)\b", r"\beval\b", r"base64\s+(-d|--decode)",
 )]
+
+APROBACION_TIMEOUT = int(os.environ.get("NEUROTOK_APROBACION_MIN", "30")) * 60
+# Entorno que se exporta a cada comando cuando se ejecuta por tmux (igual que el camino subprocess)
+ENV_CMD = {"NO_COLOR": "1", "CI": "1", "DEBIAN_FRONTEND": "noninteractive",
+           "PIP_PROGRESS_BAR": "off", "npm_config_progress": "false", "TERM": "dumb"}
+
+
+def clasificar(cmd: str) -> str:
+    """'bloqueado' (nunca se ejecuta), 'riesgo' (pide aprobacion) o 'normal'."""
+    if any(p.search(cmd) for p in BLOCKED):
+        return "bloqueado"
+    if any(p.search(cmd) for p in RISKY):
+        return "riesgo"
+    return "normal"
+
+
+CONSOLA.clasificar = clasificar
 
 FLOW = ["1. Idea Humana", "2. Sub-Cerebro Arquitecto", "3. Sub-Cerebro Creador",
         "4. Ejecutor Termux", "5. Sanitizador MD", "6. Bóveda Central"]
@@ -107,6 +125,15 @@ class AgentLoop:
         self.pool, self.vault = pool, vault
         self.db = db or BovedaDB(vault.root)
         self.stop_event = threading.Event()
+        self._manual = threading.Lock()
+        self.tmux = None  # NEUROTOK_TMUX=1: los comandos corren en una sesion tmux visible
+        if os.environ.get("NEUROTOK_TMUX") == "1":
+            try:
+                from tmux_session import TmuxSession, available
+                if available():
+                    self.tmux = TmuxSession("neurotok", cwd=str(WORKDIR), env=ENV_CMD)
+            except ImportError:
+                pass
         WORKDIR.mkdir(parents=True, exist_ok=True)
 
     # ---- llamada a la IA con rotación automática
@@ -146,14 +173,19 @@ class AgentLoop:
         raise RuntimeError(f"Sin respuesta válida tras varios intentos. Último error: {ultimo[:300]}")
 
     # ---- ejecución segura del comando
-    def _execute(self, cmd: str) -> tuple[int, str, str, bool]:
-        if self.db.es_fallido(cmd):  # reserva de fallidos: no repetir lo que ya falló para siempre
+    def _execute(self, cmd: str, aprobado: bool = False, manual: bool = False) -> tuple[int, str, str, bool]:
+        if not manual and self.db.es_fallido(cmd):  # reserva de fallidos: no repetir lo que ya falló para siempre
             self.db.stat("rechazos_repetidos")
             return 1, "", "Comando rechazado: ya falló de forma permanente antes. Propón uno distinto.", False
-        if any(p.search(cmd) for p in BLOCKED) or (not ALLOW_RISKY and any(p.search(cmd) for p in RISKY)):
+        if any(p.search(cmd) for p in BLOCKED) or (not ALLOW_RISKY and not aprobado and any(p.search(cmd) for p in RISKY)):
             return 1, "", "Comando bloqueado por la política de seguridad.", False
         env = {**os.environ, "NO_COLOR": "1", "CI": "1", "DEBIAN_FRONTEND": "noninteractive",
                "PIP_PROGRESS_BAR": "off", "npm_config_progress": "false", "TERM": "dumb"}
+        if self.tmux:
+            r = self.tmux.run(cmd, timeout=CMD_TIMEOUT)
+            if not (r[0] == 1 and r[2].startswith("[tmux]")):
+                return r
+            CONSOLA.info("tmux no disponible: se ejecuta sin tmux. " + r[2][:120])
         try:
             r = subprocess.run(cmd, shell=True, cwd=WORKDIR, env=env, capture_output=True,
                                text=True, timeout=CMD_TIMEOUT, stdin=subprocess.DEVNULL)
@@ -169,6 +201,7 @@ class AgentLoop:
         self.vault.record_savings(pedido.raw_chars, pedido.md_chars)
         objetivo = pedido.titulo
         RUNTIME.reset(objetivo)
+        CONSOLA.nueva_tarea(objetivo)
         tid, paso_ids, t0 = None, [], time.time()
         try:
             RUNTIME.set(estado="PLANIFICANDO", etapa=1)
@@ -176,6 +209,7 @@ class AgentLoop:
             pasos = [str(p) for p in plan["pasos"]][:10] or [objetivo]
             total = len(pasos)
             RUNTIME.set(total=total, estado="EJECUTANDO")
+            CONSOLA.cerebro("Plan: " + " · ".join(f"{k}. {p[:60]}" for k, p in enumerate(pasos, 1)))
             tid, paso_ids = self.db.nueva_tarea(objetivo, pasos, pedido.md)
             self.vault.update_state(objetivo, 1, total, "Plan creado", pasos[0])
             it_global = 0
@@ -185,6 +219,7 @@ class AgentLoop:
                 RUNTIME.set(paso=i)
                 pid = paso_ids[i - 1] if i <= len(paso_ids) else None
                 hist: list[tuple[str, int]] = []  # (comando normalizado, exit) de ESTE paso
+                rechazados: dict[str, str] = {}  # comandos que el usuario rechazo en este paso
                 fallos, repetidos, ultimo_code, terminado = 0, 0, None, False
                 last_md = "(primer turno del paso)"
                 plan_txt = "\n".join(f"{'►' if k == i else ' '} {k}. {p}" for k, p in enumerate(pasos, 1))
@@ -194,11 +229,12 @@ class AgentLoop:
                     roles = ["auditor"] if fallos >= 2 else ["creador"]
                     extra = self.db.contexto_para(objetivo, paso)
                     hecho = "\n".join(f"- `{c[:100]}` -> exit {x}" for c, x in hist[-8:]) or "(ninguno todavía)"
-                    user = (f"{self.vault.read_context()}{extra}\n\nPlan completo:\n{plan_txt}\n\n"
+                    user = (f"{self.vault.read_context()}{extra}{CONSOLA.mensajes_para_ia()}\n\nPlan completo:\n{plan_txt}\n\n"
                             f"Paso actual {i}/{total}: {paso}\n"
                             f"Comandos ya ejecutados en este paso:\n{hecho}\n"
                             f"Último resultado:\n<salida_datos>\n{last_md}\n</salida_datos>")
                     r = self._ask(roles, SYS_EXEC, user, ("pensamiento", "comando", "estado"))
+                    CONSOLA.cerebro(str(r.get("pensamiento", "")))
                     cmd = str(r.get("comando") or "").strip()
                     fin = str(r["estado"]).upper() == "FINALIZADO"
                     clave = " ".join(cmd.split())
@@ -213,18 +249,35 @@ class AgentLoop:
                         if repetidos >= 2 and ultimo_code == 0:
                             fin = True  # la IA insiste en repetir: se da el paso por cumplido y se avisa
                             RUNTIME.set(aviso=f"Paso {i} cerrado: la IA repitió comandos que ya habían salido bien")
+                    elif clave in rechazados:
+                        # el usuario ya rechazo este comando en este paso: no se le vuelve a preguntar
+                        repetidos += 1
+                        last_md = (f"El usuario YA RECHAZÓ ese comando (`{cmd[:80]}`): {rechazados[clave]}. "
+                                   "Propón uno distinto o responde FINALIZADO si no hay alternativa.")
+                        res = f"Rechazado antes: `{cmd[:60]}`"
                     elif cmd:
+                        cmd, motivo, aprobado = self._aprobar(cmd, str(r.get("pensamiento", "")), i, pid)
+                        if motivo is None:
+                            clave = " ".join(cmd.split())  # el usuario pudo editarlo
                         RUNTIME.set(etapa=3, comando_activo=cmd)
-                        code, out, err, to = self._execute(cmd)
+                        if motivo is None:
+                            CONSOLA.cmd(cmd)
+                            code, out, err, to = self._execute(cmd, aprobado=aprobado)
+                        else:  # rechazado por el usuario: no se ejecuta y la IA recibe el motivo
+                            rechazados[clave] = motivo
+                            code, out, err, to = 1, "", f"El usuario RECHAZÓ este comando. Motivo: {motivo}. Propón una alternativa distinta.", False
                         RUNTIME.set(etapa=4)
                         s = sanitize(cmd, code, out, err, to)
                         last_md = s.markdown.replace("<salida_datos>", "").replace("</salida_datos>", "")
-                        fallos = fallos + 1 if code != 0 else 0
+                        fallos = (fallos + 1 if code != 0 else 0) if motivo is None else fallos
                         hist.append((clave, code))
                         ultimo_code = code
                         RUNTIME.set(etapa=5, consola_md=s.markdown, ahorro_pct=s.savings_pct)
+                        if motivo is None:
+                            CONSOLA.salida(cmd, code, out, err, to, s.markdown)
                         self.vault.record_savings(s.raw_chars, s.clean_chars)
-                        self.db.comando(pid, cmd, code, err, to, objetivo, s.markdown)
+                        if motivo is None:
+                            self.db.comando(pid, cmd, code, err, to, objetivo, s.markdown)
                         self.vault.append_log(it_global, RUNTIME.neurona, r["pensamiento"], s.markdown)
                         res = f"`{cmd[:80]}` -> exit {code}"
                     else:
@@ -238,22 +291,74 @@ class AgentLoop:
                     terminado = True  # límite de vueltas, pero el último comando salió bien
                     RUNTIME.set(aviso=f"Paso {i} cerrado por límite de vueltas (último comando OK)")
                 self.db.paso_estado(pid, "ok" if terminado else "fallo")
+                CONSOLA.sistema(f"Paso {i}/{total} {'completo' if terminado else 'sin completar'}: {paso[:80]}")
                 if not terminado:
                     fallo_tarea = f"El paso {i} no se completó: {paso[:80]}"
                     break
 
             if fallo_tarea:
                 RUNTIME.set(estado="ERROR", error=fallo_tarea, comando_activo="")
+                CONSOLA.fin("ERROR", fallo_tarea)
                 self.db.cerrar_tarea(tid, "fallo", t0, WORKDIR)
             else:
                 RUNTIME.set(estado="FINALIZADO", comando_activo="", etapa=5)
+                CONSOLA.fin("FINALIZADO", "Tarea completada")
                 self.db.cerrar_tarea(tid, "ok", t0, WORKDIR)
         except Exception as e:  # noqa: BLE001
             RUNTIME.set(estado="ERROR", error=str(e))
+            CONSOLA.fin("ERROR", str(e))
             self.db.cerrar_tarea(tid, "fallo", t0, WORKDIR)
+
+    # ---- aprobacion humana de comandos
+    def _aprobar(self, cmd: str, pensamiento: str, paso: int, pid) -> tuple[str, str | None, bool]:
+        """(comando_a_ejecutar, motivo_de_rechazo | None, aprobado_por_el_usuario).
+        Manual: pregunta siempre. Auto: solo pregunta si es de riesgo (salvo NEUROTOK_ALLOW_RISKY=1).
+        Los bloqueados no se preguntan: _execute los rechaza. RuntimeError si se cancela o no hay respuesta."""
+        clase = clasificar(cmd)
+        if clase == "bloqueado":
+            return cmd, None, False
+        if CONSOLA.modo == "auto" and not (clase == "riesgo" and not ALLOW_RISKY):
+            return cmd, None, False
+        it = CONSOLA.cola.proponer(cmd, pensamiento, paso, clase == "riesgo")
+        RUNTIME.set(aviso="Esperando tu aprobación en la pestaña Terminal")
+        dec = CONSOLA.cola.esperar(it, self.stop_event, APROBACION_TIMEOUT)
+        RUNTIME.set(aviso="")
+        accion = dec.get("accion")
+        if accion == "aprobar":
+            final = dec.get("cmd") or cmd
+            if final != cmd:
+                registrar_correccion(self.db, pid, cmd, final, "editar")
+            return final, None, True
+        if accion == "rechazar":
+            motivo = dec.get("motivo") or "sin motivo"
+            registrar_correccion(self.db, pid, cmd, "", "rechazar", motivo)
+            return cmd, motivo, False
+        if accion == "timeout":
+            raise RuntimeError(f"Sin respuesta del usuario en {APROBACION_TIMEOUT // 60} min: tarea detenida")
+        raise RuntimeError("Detenido por el usuario")
+
+    def exec_manual(self, cmd: str) -> tuple[bool, str]:
+        """Ejecuta un comando escrito por el usuario (terminal manual) sin bloquear la API."""
+        if not self._manual.acquire(blocking=False):
+            return False, "Ya hay un comando manual en curso."
+
+        def _run() -> None:
+            try:
+                CONSOLA.cmd(cmd, manual=True)
+                code, out, err, to = self._execute(cmd, manual=True)
+                s = sanitize(cmd, code, out, err, to)
+                CONSOLA.salida(cmd, code, out, err, to, s.markdown)
+            except Exception as e:  # noqa: BLE001
+                CONSOLA.info(f"Error en el comando manual: {e}")
+            finally:
+                self._manual.release()
+
+        threading.Thread(target=_run, daemon=True).start()
+        return True, ""
 
     def stop(self) -> None:
         self.stop_event.set()
+        CONSOLA.cola.cancelar_todo()
 
 
 if __name__ == "__main__":
