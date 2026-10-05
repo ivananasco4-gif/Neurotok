@@ -308,15 +308,15 @@ class AgentLoop:
                     break
 
             if fallo_tarea:
-                RUNTIME.set(estado="ERROR", error=fallo_tarea, comando_activo="")
+                RUNTIME.set(estado="ERROR", error=fallo_tarea, comando_activo="", etapa=-1)
                 CONSOLA.fin("ERROR", fallo_tarea)
                 self.db.cerrar_tarea(tid, "fallo", t0, WORKDIR)
             else:
-                RUNTIME.set(estado="FINALIZADO", comando_activo="", etapa=5)
+                RUNTIME.set(estado="FINALIZADO", comando_activo="", etapa=-1)
                 CONSOLA.fin("FINALIZADO", "Tarea completada")
                 self.db.cerrar_tarea(tid, "ok", t0, WORKDIR)
         except Exception as e:  # noqa: BLE001
-            RUNTIME.set(estado="ERROR", error=str(e))
+            RUNTIME.set(estado="ERROR", error=str(e), etapa=-1)
             CONSOLA.fin("ERROR", str(e))
             self.db.cerrar_tarea(tid, "fallo", t0, WORKDIR)
 
