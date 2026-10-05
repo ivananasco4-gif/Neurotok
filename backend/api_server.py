@@ -46,6 +46,10 @@ SUBCEREBROS = {"orquestador": "Cerebro Central (Router)", "arquitecto": "Sub-Cer
                "creador": "Sub-Cerebro Creador / Code", "auditor": "Sub-Cerebro Auditor / Debugger"}
 
 
+def get_neurons_resumen() -> dict:
+    return pool.resumen()
+
+
 def get_neurons() -> dict:
     lista = pool.snapshot()
     for n in lista:
@@ -56,6 +60,7 @@ def get_neurons() -> dict:
 ROUTES_GET = {
     "/status": RUNTIME.status,
     "/neurons": get_neurons,
+    "/neurons/resumen": get_neurons_resumen,
     "/boveda": lambda: {"estado_actual_md": vault.read_context(), "metricas": {**vault.metrics(), **db.metricas()}},
     "/boveda/grafo": db.grafo,
     "/boveda/fallidos": db.fallidos_lista,
