@@ -62,6 +62,17 @@
       "rol_sugerido": "auditor",
       "modelo": "grok-4",
       "estado": "DISPONIBLE"
+    },
+    {
+      "id": "omni_01",
+      "nombre": "OmniRoute 1",
+      "proveedor": "omniroute",
+      "tipo_auth": "api_key",
+      "credencial": "TU_API_KEY_OMNIROUTE",
+      "url": "http://HOST:20128/v1",
+      "modelos": "auto",
+      "max_modelos": 100,
+      "rol_sugerido": "creador"
     }
   ]
 }
