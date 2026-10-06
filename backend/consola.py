@@ -30,6 +30,35 @@ MAX_MOSTRAR = 6000        # largo maximo de un comando al mandarlo a la app
 MAX_PAGINA = 300          # lineas maximas por respuesta de /terminal y /chat
 
 
+try:  # el sanitizador del proyecto: la misma limpieza que recibe la IA, pero sin el envoltorio Markdown
+    from sanitizer import clean_lines, strip_ansi, truncate
+except Exception:  # noqa: BLE001
+    clean_lines = strip_ansi = truncate = None
+
+
+def _cruda(texto: str) -> str:
+    """Salida tal cual (con claves tapadas); solo se quitan colores y el \\r\\n, que la app no sabe pintar."""
+    t = _limpiar(texto or "")
+    if strip_ansi:
+        try:
+            t = strip_ansi(t)
+        except Exception:  # noqa: BLE001
+            pass
+    return _recortar(t.replace("\r\n", "\n"), 8000)
+
+
+def _filtrar(texto: str, tope: int) -> str:
+    """Salida limpia para la vista Filtrada: sin colores ni barras de progreso, sin repeticiones y recortada
+    como hace el sanitizador (5 primeras + 10 ultimas lineas). Sin cabeceras ni vallas Markdown."""
+    t = _limpiar(texto or "")
+    if clean_lines and truncate:
+        try:
+            t = "\n".join(truncate(clean_lines(t)))
+        except Exception:  # noqa: BLE001
+            pass
+    return _recortar(t.rstrip(), tope)
+
+
 def _hora() -> str:
     return time.strftime("%H:%M:%S")
 
@@ -184,11 +213,14 @@ class Consola:
         self.terminal.add(tipo="cmd", texto=("(manual) " if manual else "") + t, crudo=t)
 
     def salida(self, cmd: str, code: int, out: str, err: str, to: bool, md: str = "") -> None:
-        md, out, err = _sin_tags(_limpiar(md)), _limpiar(out or ""), _limpiar(err or "")
-        if md or out.strip():
-            self.terminal.add(tipo="out", texto=_recortar(md or out, 8000), crudo=_recortar(out, 8000))
-        if err.strip():
-            self.terminal.add(tipo="err", texto=_recortar(err, 1500), crudo=_recortar(err, 8000))
+        # `md` (el bloque Markdown que se manda a la IA) se conserva en la firma por compatibilidad, pero ya
+        # no se muestra: la vista "Filtrada" enseña la salida limpia y la "Cruda" la salida tal cual.
+        for tipo, bruto, tope in (("out", out, 8000), ("err", err, 3000)):
+            limpio, crudo = _filtrar(bruto, tope), _cruda(bruto)
+            if not crudo.strip():
+                continue  # sin salida: basta la linea "exit N"
+            self.terminal.add(tipo=tipo, texto=limpio.strip() and limpio or "(solo ruido de progreso omitido)",
+                              crudo=crudo)
         fin = f"exit {code}" + (" (timeout)" if to else "")
         self.terminal.add(tipo="info", texto=fin, crudo=fin)
 
