@@ -154,7 +154,7 @@ def clasificar_error(status, headers=None, body=None, proveedor=""):
 
     if status in (401, 407) or (status == 403 and not cuota_txt and not _RE_RITMO.search(blob)
                                 and "resource_exhausted" not in blob):
-        return "auth", _acotar(hint if hint else DEF_AUTH)
+        return "auth", _acotar(max(hint or 0, DEF_AUTH))  # una credencial mala no se arregla en segundos
     if status == 402 or cuota_txt:
         return "cuota", _acotar(hint if hint else DEF_CUOTA)
     if status == 429 or "resource_exhausted" in blob or status == 403:
