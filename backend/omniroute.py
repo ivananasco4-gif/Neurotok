@@ -17,7 +17,7 @@ except ImportError:  # uso como paquete
 
 _NO_CHAT = ("embed", "rerank", "whisper", "tts", "transcri", "moderation", "dall-e", "dalle",
             "image", "imagen", "flux", "stable-diffusion", "sdxl", "music", "video", "audio",
-            "speech", "ocr")
+            "speech", "ocr", "veo")
 
 
 def es_modelo_chat(entrada):
@@ -50,6 +50,23 @@ def _req(url, credencial, datos=None, timeout=30):
     return urllib.request.Request(url, data=body, headers=h)
 
 
+def repartir_por_proveedor(ids, maximo):
+    """Elige hasta `maximo` ids repartiéndolos por turnos entre proveedores (prefijo antes de '/'),
+    para que un proveedor con cientos de modelos no desplace a los demás. Conserva el orden dentro de cada uno."""
+    maximo = max(1, int(maximo))
+    grupos = {}
+    for i in ids:
+        grupos.setdefault(i.split("/", 1)[0] if "/" in i else "", []).append(i)
+    cola = [list(g) for g in grupos.values()]
+    out, k = [], 0
+    while len(out) < maximo and any(cola):
+        for g in cola:
+            if g and len(out) < maximo:
+                out.append(g.pop(0))
+        k += 1
+    return out
+
+
 def listar_modelos(url, credencial, timeout=15, max_modelos=100):
     """GET {url}/models -> lista de ids de chat (sin duplicados, tope max_modelos)."""
     with urllib.request.urlopen(_req(url.rstrip("/") + "/models", credencial), timeout=timeout) as r:
@@ -62,7 +79,7 @@ def listar_modelos(url, credencial, timeout=15, max_modelos=100):
             if mid not in vistos:
                 vistos.add(mid)
                 ids.append(mid)
-    return ids[:max(1, int(max_modelos))]
+    return repartir_por_proveedor(ids, max_modelos)
 
 
 def chat(url, credencial, modelo, mensajes, timeout=60, max_tokens=None):
