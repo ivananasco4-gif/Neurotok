@@ -385,7 +385,7 @@ def call_llm(n: Neurona, system: str, user: str) -> str:
         if p in OPENAI_COMPAT:
             url, default_model = OPENAI_COMPAT[p]
             r = requests.post(
-                url, headers={"Authorization": f"Bearer {n.credencial}"},
+                url, headers={"Authorization": f"Bearer {n.credencial}", "User-Agent": "Mozilla/5.0 (Neurotok)"},
                 json={"model": n.modelo or default_model, "max_tokens": 1500,
                       "messages": [{"role": "system", "content": system},
                                    {"role": "user", "content": user}]},

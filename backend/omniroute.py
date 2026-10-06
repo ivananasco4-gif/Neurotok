@@ -47,6 +47,7 @@ def _req(url, credencial, datos=None, timeout=30):
     if datos is not None:
         body = json.dumps(datos).encode()
         h["Content-Type"] = "application/json"
+    h.setdefault("User-Agent", "Mozilla/5.0 (Neurotok)")
     return urllib.request.Request(url, data=body, headers=h)
 
 
