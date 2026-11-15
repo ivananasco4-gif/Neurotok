@@ -29,6 +29,8 @@ jobs:
       - name: Autoprueba del filtro de entrada
         run: |
           if [ -f backend/prompt_filter.py ]; then python backend/prompt_filter.py > /dev/null; fi
+      - name: Instalar dependencias del backend
+        run: pip install -r backend/requirements.txt
       - name: Tests offline (OmniRoute falso, cerebro y neuronas simulados)
         run: for t in tests/test_*.py; do echo "== $t"; python "$t" || exit 1; done
 
