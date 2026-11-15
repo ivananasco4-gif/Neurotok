@@ -17,6 +17,8 @@ import omniroute as _omni
 
 DISPONIBLE, TRABAJANDO, EN_PAUSA = "DISPONIBLE", "TRABAJANDO", "EN_PAUSA"
 DEFAULT_COOLDOWN = 60.0
+SUB_CEREBROS = ("arquitecto", "creador", "auditor")
+ROLES_AUTO = ("creador", "auditor", "creador", "arquitecto")  # rol_sugerido "auto": más creadores
 TIMEOUT_HTTP = 90
 _POOL_ACTIVO = None  # lo fija WorkerPool; call_llm(omniroute) le avisa de pausas
 
@@ -109,13 +111,16 @@ class WorkerPool:
                 n.estado = DISPONIBLE
 
     def acquire(self, roles: list[str]) -> Neurona | None:
-        """Devuelve una neurona DISPONIBLE, priorizando roles en orden; si no, cualquiera."""
+        """Devuelve una neurona DISPONIBLE, priorizando roles en orden. Si no hay, cualquier neurona que NO
+        sea el cerebro (orquestador) y, solo como último recurso, el propio cerebro: así la cuota del cerebro
+        se reserva para planificar y el trabajo va a las neuronas (OmniRoute y directas)."""
         with self._lock:
             self._refresh()
-            for rol in roles + [None]:
+            for rol in list(roles) + ["*", None]:
                 ahora = time.time()
                 libres = [n for n in self.neuronas
-                          if n.estado == DISPONIBLE and (rol is None or n.rol_sugerido == rol)
+                          if n.estado == DISPONIBLE
+                          and (rol is None or n.rol_sugerido == rol or (rol == "*" and n.rol_sugerido != "orquestador"))
                           and self._inst_hasta.get(n.instancia, 0.0) <= ahora
                           and self._prov_hasta.get(self._pk(n), 0.0) <= ahora]
                 if libres:
@@ -164,10 +169,14 @@ class WorkerPool:
                 print(f"[pool] {iid}: no pude listar modelos ({type(e).__name__}). Omitida; reinicia con la instancia arriba.")
                 return
         self._inst_cfg[iid] = {"nombre": c.get("nombre", iid), "url": url}
-        for m in list(mods)[:mx]:
+        rol = c.get("rol_sugerido", "creador")
+        for k, m in enumerate(list(mods)[:mx]):
+            # "auto": los modelos se reparten por turnos entre los sub-cerebros (la lista ya viene
+            # intercalada por proveedor, así cada sub-cerebro recibe modelos de varios proveedores)
+            r = ROLES_AUTO[k % len(ROLES_AUTO)] if rol == "auto" else rol
             self.neuronas.append(Neurona(
                 id=f"{iid}/{m}", proveedor="omniroute", credencial=cred,
-                rol_sugerido=c.get("rol_sugerido", "creador"), modelo=m, instancia=iid, url=url))
+                rol_sugerido=r, modelo=m, instancia=iid, url=url))
 
     @staticmethod
     def _prov(n: Neurona) -> str:
@@ -320,9 +329,10 @@ def _simulado(n: Neurona, system: str, user: str) -> str:
     _SIM_N[n.id] = _SIM_N.get(n.id, 0) + 1
     if n.id == "crea_sim_1" and _SIM_N[n.id] == 2:
         raise RateLimitError(20.0)  # simula quedarse sin cuota: pasa a crea_sim_2
-    if "Sub-Cerebro Arquitecto" in system:
+    if '{"pasos"' in system:  # el cerebro pide el plan
         _SIM_CALLS.clear()
-        return json.dumps({"pasos": _SIM_PLAN})
+        roles = ["creador", "auditor", "creador"]
+        return json.dumps({"pasos": [{"titulo": t, "sub_cerebro": roles[k % 3]} for k, t in enumerate(_SIM_PLAN)]})
     m = re.search(r"Paso (\d+)/", user)
     i = int(m.group(1)) if m else 1
     cmds = _SIM_CMDS[(i - 1) % len(_SIM_CMDS)]

@@ -29,6 +29,8 @@ jobs:
       - name: Autoprueba del filtro de entrada
         run: |
           if [ -f backend/prompt_filter.py ]; then python backend/prompt_filter.py > /dev/null; fi
+      - name: Tests offline (OmniRoute falso, cerebro y neuronas simulados)
+        run: for t in tests/test_*.py; do echo "== $t"; python "$t" || exit 1; done
 
   app-sintaxis:
     name: App (sintaxis JS/JSX)
@@ -46,6 +48,8 @@ jobs:
           echo "Archivos a comprobar: ${#ARCHIVOS[@]}"
           [ "${#ARCHIVOS[@]}" -gt 0 ] || { echo "No hay archivos JS en app_fuente"; exit 1; }
           npx --yes esbuild@0.25.0 "${ARCHIVOS[@]}" --loader:.js=jsx --log-level=warning --outdir=/tmp/syntax
+      - name: Test del Lienzo (cientos de neuronas agrupadas)
+        run: node tests/test_layout.mjs
 
   app-bundle:
     # Compila de verdad (Metro + Hermes). No bloquea mientras no se haya visto verde; cuando lo

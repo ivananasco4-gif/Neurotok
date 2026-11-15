@@ -14,7 +14,7 @@ from consola import CONSOLA, registrar_correccion
 from prompt_filter import filtrar
 from sanitizer import sanitize
 from vault_manager import VaultManager
-from worker_pool import (AuthError, LLMError, ModelError, RateLimitError, WorkerPool, call_llm)
+from worker_pool import (SUB_CEREBROS, AuthError, LLMError, ModelError, RateLimitError, WorkerPool, call_llm)
 
 CMD_TIMEOUT = int(os.environ.get("CMD_TIMEOUT", "120"))
 MAX_ITER_PASO = 8
@@ -55,13 +55,19 @@ CONSOLA.clasificar = clasificar
 FLOW = ["1. Idea Humana", "2. Sub-Cerebro Arquitecto", "3. Sub-Cerebro Creador",
         "4. Ejecutor Termux", "5. Sanitizador MD", "6. Bóveda Central"]
 
-SYS_ARQ = ('Eres el Sub-Cerebro Arquitecto. Desglosa el objetivo en los pasos MÍNIMOS necesarios: '
+SYS_ARQ = ('Eres el Cerebro Central de Neurotok. Desglosa el objetivo en los pasos MÍNIMOS necesarios: '
            '1 solo paso si basta un comando o una tarea simple; añade más solo si hay etapas realmente '
            'distintas (máximo 8). No añadas pasos de preparación, de verificación ni de permisos que el '
            'objetivo no pida. Entorno: Termux (Android, sin root). Cada comando se ejecuta aislado, siempre '
            'en la carpeta de trabajo: ningún paso puede depender de un cd ni de variables de un paso anterior; '
-           'usa rutas relativas. Responde SOLO JSON: {"pasos": ["..."]}')
-SYS_EXEC = ('Eres un agente que opera en Termux (Android). En cada turno emites UN comando bash '
+           'usa rutas relativas. Asigna cada paso a UN sub-cerebro: "arquitecto" (crear estructura, '
+           'carpetas, archivos de configuración), "creador" (escribir código, instalar, ejecutar) o '
+           '"auditor" (probar, revisar, depurar errores). Responde SOLO JSON: '
+           '{"pasos": [{"titulo": "...", "sub_cerebro": "arquitecto|creador|auditor"}]}')
+ROL_TXT = {"arquitecto": "Sub-Cerebro Arquitecto (estructura y configuración)",
+           "creador": "Sub-Cerebro Creador (código, instalación y ejecución)",
+           "auditor": "Sub-Cerebro Auditor (pruebas, revisión y depuración)"}
+SYS_EXEC = ('Eres una neurona de Neurotok que opera en Termux (Android). En cada turno emites UN comando bash '
             'no interactivo (usa -y, sin prompts); puedes encadenar con && si es parte del mismo paso. '
             'Responde SOLO JSON estricto: '
             '{"pensamiento": "...", "comando": "...", "estado": "CONTINUAR|FINALIZADO"}. '
@@ -98,6 +104,8 @@ class Runtime:
             self.error = ""
             self.neurona = ""
             self.aviso = ""
+            self.sub_cerebro = ""
+            self.plan: list[dict] = []
 
     def set(self, **kw) -> None:
         with self.lock:
@@ -111,16 +119,51 @@ class Runtime:
             return {"objetivo": self.objetivo, "estado": self.estado, "progreso_pct": pct,
                     "paso_actual": self.paso, "total_pasos": self.total,
                     "iteracion": self.iteracion, "neurona_activa": self.neurona, "error": self.error,
-                    "aviso": self.aviso}
+                    "aviso": self.aviso, "sub_cerebro_activo": self.sub_cerebro,
+                    "plan": [dict(p) for p in self.plan]}
 
     def flow(self) -> dict:
         with self.lock:
             return {"etapas": [{"nombre": n, "activa": i == self.etapa} for i, n in enumerate(FLOW)],
                     "comando_activo": self.comando_activo, "ahorro_pct": self.ahorro_pct,
-                    "consola_md": self.consola_md}
+                    "consola_md": self.consola_md, "sub_cerebro_activo": self.sub_cerebro,
+                    "neurona_activa": self.neurona}
+
+    def anotar_neurona(self, i: int, nid: str) -> None:
+        """Recuerda qué neuronas trabajaron cada paso (las últimas 5, sin repetir)."""
+        with self.lock:
+            if nid and 0 < i <= len(self.plan):
+                ns = [x for x in self.plan[i - 1]["neuronas"] if x != nid] + [nid]
+                self.plan[i - 1]["neuronas"] = ns[-5:]
+
+    def plan_estado(self, i: int, estado: str) -> None:
+        with self.lock:
+            if 0 < i <= len(self.plan):
+                self.plan[i - 1]["estado"] = estado
 
 
 RUNTIME = Runtime()
+
+
+def normalizar_plan(plan: dict, objetivo: str) -> list[dict]:
+    """Acepta {"pasos": ["texto", ...]} (formato antiguo) o [{"titulo", "sub_cerebro"}]. Rol desconocido -> creador."""
+    out = []
+    for p in (plan.get("pasos") or [])[:10]:
+        if isinstance(p, dict):
+            titulo = str(p.get("titulo") or p.get("paso") or p.get("descripcion") or "").strip()
+            rol = str(p.get("sub_cerebro") or p.get("rol") or "").strip().lower()
+        else:
+            titulo, rol = str(p).strip(), ""
+        if titulo:
+            out.append({"titulo": titulo, "sub_cerebro": rol if rol in SUB_CEREBROS else "creador"})
+    return out or [{"titulo": objetivo, "sub_cerebro": "creador"}]
+
+
+def roles_para(asignado: str, fallos: int) -> list[str]:
+    """Neuronas que trabajan un paso: las del sub-cerebro asignado; tras 2 fallos seguidos, entra el auditor."""
+    if fallos >= 2 and asignado != "auditor":
+        return ["auditor", asignado]
+    return [asignado]
 
 
 def parse_json(text: str) -> dict:
@@ -216,18 +259,25 @@ class AgentLoop:
         tid, paso_ids, t0 = None, [], time.time()
         try:
             RUNTIME.set(estado="PLANIFICANDO", etapa=1)
-            plan = self._ask(["orquestador", "arquitecto"], SYS_ARQ, pedido.md, ("pasos",))
-            pasos = [str(p) for p in plan["pasos"]][:10] or [objetivo]
+            RUNTIME.set(sub_cerebro="orquestador")
+            plan = normalizar_plan(self._ask(["orquestador", "arquitecto"], SYS_ARQ, pedido.md, ("pasos",)), objetivo)
+            pasos = [p["titulo"] for p in plan]
+            asignados = [p["sub_cerebro"] for p in plan]
             total = len(pasos)
-            RUNTIME.set(total=total, estado="EJECUTANDO")
-            CONSOLA.cerebro("Plan: " + " · ".join(f"{k}. {p[:60]}" for k, p in enumerate(pasos, 1)))
+            RUNTIME.set(total=total, estado="EJECUTANDO",
+                        plan=[{**p, "estado": "pendiente", "neuronas": []} for p in plan])
+            CONSOLA.cerebro("Plan: " + " · ".join(f"{k}. [{a}] {p[:60]}"
+                                                   for k, (p, a) in enumerate(zip(pasos, asignados), 1)))
             tid, paso_ids = self.db.nueva_tarea(objetivo, pasos, pedido.md)
             self.vault.update_state(objetivo, 1, total, "Plan creado", pasos[0])
             it_global = 0
             fallo_tarea = ""
 
             for i, paso in enumerate(pasos, 1):
-                RUNTIME.set(paso=i)
+                asignado = asignados[i - 1]
+                RUNTIME.set(paso=i, sub_cerebro=asignado)
+                RUNTIME.plan_estado(i, "en_curso")
+                CONSOLA.info(f"Paso {i}/{total} → {ROL_TXT[asignado].split(' (')[0]}: {paso[:100]}")
                 pid = paso_ids[i - 1] if i <= len(paso_ids) else None
                 hist: list[tuple[str, int]] = []  # (comando normalizado, exit) de ESTE paso
                 rechazados: dict[str, str] = {}  # comandos que el usuario rechazo en este paso
@@ -237,14 +287,17 @@ class AgentLoop:
                 for _ in range(MAX_ITER_PASO):
                     it_global += 1
                     RUNTIME.set(iteracion=it_global, etapa=2)
-                    roles = ["auditor"] if fallos >= 2 else ["creador"]
+                    roles = roles_para(asignado, fallos)
+                    RUNTIME.set(sub_cerebro=roles[0])
                     extra = self.db.contexto_para(objetivo, paso)
                     hecho = "\n".join(f"- `{c[:100]}` -> exit {x}" for c, x in hist[-8:]) or "(ninguno todavía)"
                     user = (f"{self.vault.read_context()}{extra}{CONSOLA.mensajes_para_ia()}\n\nPlan completo:\n{plan_txt}\n\n"
                             f"Paso actual {i}/{total}: {paso}\n"
                             f"Comandos ya ejecutados en este paso:\n{hecho}\n"
                             f"Último resultado:\n<salida_datos>\n{last_md}\n</salida_datos>")
-                    r = self._ask(roles, SYS_EXEC, user, ("pensamiento", "comando", "estado"))
+                    sys_rol = f"Actúas para el {ROL_TXT[roles[0]]}. " + SYS_EXEC
+                    r = self._ask(roles, sys_rol, user, ("pensamiento", "comando", "estado"))
+                    RUNTIME.anotar_neurona(i, RUNTIME.neurona)
                     CONSOLA.cerebro(str(r.get("pensamiento", "")))
                     cmd = str(r.get("comando") or "").strip()
                     fin = str(r["estado"]).upper() == "FINALIZADO"
@@ -302,21 +355,22 @@ class AgentLoop:
                     terminado = True  # límite de vueltas, pero el último comando salió bien
                     RUNTIME.set(aviso=f"Paso {i} cerrado por límite de vueltas (último comando OK)")
                 self.db.paso_estado(pid, "ok" if terminado else "fallo")
+                RUNTIME.plan_estado(i, "ok" if terminado else "fallo")
                 CONSOLA.sistema(f"Paso {i}/{total} {'completo' if terminado else 'sin completar'}: {paso[:80]}")
                 if not terminado:
                     fallo_tarea = f"El paso {i} no se completó: {paso[:80]}"
                     break
 
             if fallo_tarea:
-                RUNTIME.set(estado="ERROR", error=fallo_tarea, comando_activo="", etapa=-1)
+                RUNTIME.set(estado="ERROR", error=fallo_tarea, comando_activo="", etapa=-1, sub_cerebro="")
                 CONSOLA.fin("ERROR", fallo_tarea)
                 self.db.cerrar_tarea(tid, "fallo", t0, WORKDIR)
             else:
-                RUNTIME.set(estado="FINALIZADO", comando_activo="", etapa=-1)
+                RUNTIME.set(estado="FINALIZADO", comando_activo="", etapa=-1, sub_cerebro="")
                 CONSOLA.fin("FINALIZADO", "Tarea completada")
                 self.db.cerrar_tarea(tid, "ok", t0, WORKDIR)
         except Exception as e:  # noqa: BLE001
-            RUNTIME.set(estado="ERROR", error=str(e), etapa=-1)
+            RUNTIME.set(estado="ERROR", error=str(e), etapa=-1, sub_cerebro="")
             CONSOLA.fin("ERROR", str(e))
             self.db.cerrar_tarea(tid, "fallo", t0, WORKDIR)
 

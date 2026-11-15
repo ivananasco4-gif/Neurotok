@@ -72,7 +72,7 @@
       "url": "http://HOST:20128/v1",
       "modelos": "auto",
       "max_modelos": 100,
-      "rol_sugerido": "creador"
+      "rol_sugerido": "auto"
     }
   ]
 }

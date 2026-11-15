@@ -24,6 +24,13 @@ export const demoInit = () => ({
     n('qwen_01', 'qwen', 'creador', 'DISPONIBLE'),
     n('claude_01', 'claude', 'auditor', 'DISPONIBLE'),
     n('grok_01', 'grok', 'auditor', 'EN_PAUSA', 40),
+    // 2 instancias OmniRoute × 40 modelos (rol "auto": se reparten entre sub-cerebros)
+    ...['omni_01', 'omni_02'].flatMap((inst, k) => Array.from({ length: 40 }, (_, i) => ({
+      ...n(`${inst}/${['groq', 'gemini', 'qwen', 'cerebras'][i % 4]}/modelo-${i}`, 'omniroute',
+        ['creador', 'auditor', 'creador', 'arquitecto'][i % 4], (i + k) % 9 === 0 ? 'EN_PAUSA' : 'DISPONIBLE',
+        (i + k) % 9 === 0 ? 30 + i * 5 : 0),
+      instancia: inst,
+    }))),
   ],
 });
 

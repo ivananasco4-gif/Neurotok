@@ -72,15 +72,21 @@ const Btn = ({ children, onPress, on }) => (
 );
 
 // ---------------------------------------------------------------- Lienzo
+const SUB_NOMBRE = { orquestador: 'Cerebro', arquitecto: 'Arquitecto', creador: 'Creador', auditor: 'Auditor' };
 function Lienzo({ snap }) {
   const st = snap.status;
   const running = st.estado === 'EJECUTANDO' || st.estado === 'PLANIFICANDO';
   const idx = snap.flow.etapas.findIndex((e) => e.activa);
-  const graph = useMemo(() => buildGraph(snap.neurons.neuronas, idx, running), [snap.neurons, idx, running]);
+  const subActivo = snap.flow.sub_cerebro_activo || '';
+  const graph = useMemo(() => buildGraph(snap.neurons.neuronas, idx, running, subActivo),
+    [snap.neurons, idx, running, subActivo]);
   return (
     <View style={{ flex: 1 }}>
       <View style={s.strip}>
         <Text style={s.mut} numberOfLines={1}>{st.estado} · paso {st.paso_actual}/{st.total_pasos} · {st.progreso_pct}%</Text>
+        {running && !!st.neurona_activa && (
+          <Text style={s.mut} numberOfLines={1}>→ {SUB_NOMBRE[subActivo] || 'Cerebro'} · {st.neurona_activa}</Text>
+        )}
         <View style={s.barBg}><View style={[s.barFg, { width: `${st.progreso_pct}%` }]} /></View>
       </View>
       <Canvas graph={graph} chips storageKey="neurotok:pos:lienzo" hud={{ cmd: snap.flow.comando_activo, ahorro: snap.flow.ahorro_pct }} />

@@ -57,7 +57,29 @@ export function boundsOf(nodes) {
 }
 
 // ---------------------------------------------------------------- Lienzo (cerebro)
-export function buildGraph(neuronas, idx, running) {
+// Agrupa las neuronas de un sub-cerebro: las directas se dibujan una a una (máx. MAX_DIRECTAS) y las de
+// OmniRoute, un nodo por instancia con contadores. Así 500 neuronas caben en pocas decenas de nodos.
+export const MAX_DIRECTAS = 6;
+export function agruparNeuronas(list) {
+  const directas = list.filter((n) => !n.instancia);
+  const out = directas.slice(0, MAX_DIRECTAS).map((n) => ({ tipo: 'neurona', n }));
+  const resto = directas.slice(MAX_DIRECTAS);
+  const grupos = {};
+  list.filter((n) => n.instancia).forEach((n) => { (grupos[n.instancia] = grupos[n.instancia] || []).push(n); });
+  if (resto.length) grupos[''] = resto;
+  Object.keys(grupos).sort().forEach((k) => {
+    const ns = grupos[k];
+    const trab = ns.filter((n) => n.estado === 'TRABAJANDO');
+    const pausa = ns.filter((n) => n.estado === 'EN_PAUSA');
+    out.push({ tipo: 'grupo', id: k || 'directas', nombre: k || `+${ns.length} directas`, total: ns.length,
+      libres: ns.length - trab.length - pausa.length, trabajando: trab.length, en_pausa: pausa.length,
+      proxima: pausa.length ? Math.min(...pausa.map((n) => n.cooldown_restante_s || 0)) : 0,
+      activa: trab[0] ? trab[0].id : '' });
+  });
+  return out;
+}
+
+export function buildGraph(neuronas, idx, running, subActivo) {
   const nodes = {};
   const edges = [];
   const add = (id, cx, y, w, h, o) => { nodes[id] = { id, x: cx - w / 2, y, w, h, ...o }; return nodes[id]; };
@@ -96,15 +118,28 @@ export function buildGraph(neuronas, idx, running) {
   let maxBottom = row2 + 48;
   let creadorOut = null;
   subs.forEach(([rol, dx, t, s, stage]) => {
-    const active = idx === stage || working(rol);
-    const sub = add(`sub_${rol}`, CX + dx, row2, 150, 48, { kind: 'main', t, s, active });
-    cerebros.forEach((c) => link(`${c.id}-${rol}`, c, 'b', sub, 't', active && c === cerebro));
+    const active = (subActivo ? subActivo === rol : idx === stage) || working(rol);
     const list = by(rol);
-    list.forEach((n, i) => {
-      const nn = neuronNode(n, CX + dx + 90, row2 + 48 + 34 + i * 46);
-      link(`${rol}-${n.id}`, sub, 'b', nn, 'l', n.estado === 'TRABAJANDO');
+    const sub = add(`sub_${rol}`, CX + dx, row2, 150, 48, { kind: 'main', t,
+      s: list.length ? `${s} · ${list.length} n.` : s, active });
+    cerebros.forEach((c) => link(`${c.id}-${rol}`, c, 'b', sub, 't', active && c === cerebro));
+    const items = agruparNeuronas(list);
+    items.forEach((it, i) => {
+      const y = row2 + 48 + 34 + i * 46;
+      if (it.tipo === 'neurona') {
+        const nn = neuronNode(it.n, CX + dx + 90, y);
+        link(`${rol}-${it.n.id}`, sub, 'b', nn, 'l', it.n.estado === 'TRABAJANDO');
+        return;
+      }
+      const todas = it.en_pausa === it.total;
+      const nn = add(`grupo:${rol}:${it.id}`, CX + dx + 90, y, 120, 40, {
+        kind: 'neurona', t: cut(it.nombre, 16), full: it.activa || it.nombre,
+        s: it.trabajando ? cut(it.activa.slice(it.id.length + 1) || 'trabajando', 18)
+          : todas ? `PAUSA ${mmss(it.proxima)}` : `${it.libres}/${it.total} libres`,
+        glyph: it.trabajando ? 'run' : todas ? 'pause' : 'free', dashed: todas, dim: todas });
+      link(`${rol}-grupo-${it.id}`, sub, 'b', nn, 'l', it.trabajando > 0);
     });
-    const bottom = list.length ? row2 + 48 + 34 + list.length * 46 - 6 : row2 + 48;
+    const bottom = items.length ? row2 + 48 + 34 + items.length * 46 - 6 : row2 + 48;
     maxBottom = Math.max(maxBottom, bottom);
     if (rol === 'creador') creadorOut = add('creador_out', CX + dx, bottom, 0, 0, { kind: 'pseudo', hidden: true });
   });
